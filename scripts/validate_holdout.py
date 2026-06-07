@@ -52,6 +52,9 @@ def main():
     ap.add_argument("--memory-limit", default="4GB")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--temp-dir", default=None)
+    ap.add_argument("--label", default="data", help="tag for output files, e.g. US or NY")
+    ap.add_argument("--out-dir", default="viz", help="where to write the calibration plot + CSV")
+    ap.add_argument("--bins", type=int, default=15, help="reliability-curve bins")
     a = ap.parse_args()
 
     test_lo = a.current_year - a.holdout_years + 1
@@ -185,16 +188,49 @@ def main():
     print(f"\n  lambda vs duration-blind:  Brier {(brier_b-brier_l)/brier_b:+.2%}   "
           f"log-loss {(ll_b-ll_l)/ll_b:+.2%}   (positive = lambda better)")
 
-    # reliability / calibration for the lambda model
-    cal = con.execute(f"""SELECT floor(least(0.999,{pl})*10) AS bin, SUM(n_chk) n, SUM(n_det) d,
-        SUM({pl}*n_chk)/SUM(n_chk) pred FROM ev GROUP BY 1 ORDER BY 1""").fetchdf()
-    cal["observed"] = cal["d"] / cal["n"]
-    print("\n  calibration (lambda model): predicted vs observed detection rate")
-    print(f"  {'pred-bin':<10}{'n_trials':>12}{'pred':>9}{'observed':>10}")
-    for r in cal.itertuples():
-        print(f"  {f'{int(r.bin)*10}-{int(r.bin)*10+10}%':<10}{int(r.n):>12,}{r.pred:>9.3f}{r.observed:>10.3f}")
+    # reliability tables (predicted vs observed) for BOTH models, weighted by trials
+    def reliability(expr):
+        df = con.execute(f"""SELECT least({a.bins-1}, floor(least(1-1e-9,{expr})*{a.bins}))::INT AS bin,
+            SUM(n_chk) n, SUM(n_det) d, SUM(({expr})*n_chk)/SUM(n_chk) pred
+            FROM ev GROUP BY 1 ORDER BY 1""").fetchdf()
+        df["observed"] = df["d"] / df["n"]
+        return df
+    rel_l, rel_b = reliability(pl), reliability(pb)
     con.close()
     Path(obs_pq).unlink(missing_ok=True)
+
+    outd = Path(a.out_dir); outd.mkdir(parents=True, exist_ok=True)
+    rel = pd.concat([rel_l.assign(model="lambda"), rel_b.assign(model="duration_blind")], ignore_index=True)
+    csv_path = outd / f"holdout_{a.label}_reliability.csv"
+    rel.to_csv(csv_path, index=False)
+    print(f"\n  reliability table -> {csv_path}")
+
+    try:
+        import matplotlib; matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(6.6, 6.4))
+        ax.plot([0, 1], [0, 1], ls=":", color="#999", lw=1.2, label="perfect calibration")
+        for df, col, nm, br in [(rel_b, "#2c6fa6", "duration-blind", brier_b),
+                                (rel_l, "#c0392b", "lambda (hours)", brier_l)]:
+            sz = 12 + 90 * (df["n"] / df["n"].max()) ** 0.5     # marker size ~ trials in bin
+            ax.plot(df["pred"], df["observed"], "-", color=col, lw=1.6, alpha=.85)
+            ax.scatter(df["pred"], df["observed"], s=sz, color=col, zorder=3,
+                       label=f"{nm}  (Brier {br:.3f}, skill {1-br/brier_clim:.0%})")
+        ax.axhline(base_rate, color="#bbb", lw=.8, ls="--")
+        ax.text(0.02, base_rate + .01, f"base rate {base_rate:.1%}", fontsize=8, color="#888")
+        ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect("equal")
+        ax.set_xlabel("predicted detection probability"); ax.set_ylabel("observed detection rate")
+        ax.set_title(f"Hold-out calibration — {a.label}\n"
+                     f"test {test_lo}–{a.current_year} · {int(N):,} trials · point size ∝ √(trials in bin)",
+                     fontsize=11)
+        ax.legend(frameon=False, fontsize=9, loc="upper left")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(color="#eee", lw=.6)
+        png = outd / f"holdout_{a.label}_calibration.png"
+        fig.savefig(png, dpi=150, bbox_inches="tight", facecolor="white")
+        print(f"  calibration curve -> {png}")
+    except Exception as e:
+        print(f"  (plot skipped: {e}; reliability CSV is written — plot it yourself)")
     print("\ndone.")
 
 
