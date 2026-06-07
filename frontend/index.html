@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>birdtrip — plan your lifers</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  :root { --ink:#222; --mute:#777; --line:#e3e3e3; --accent:#c0392b; --bg:#fafafa; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); }
+  #app { display:grid; grid-template-columns:370px 1fr; height:100vh; }
+  #panel { overflow-y:auto; border-right:1px solid var(--line); padding:18px; background:var(--bg); }
+  #right { display:grid; grid-template-rows:58% 42%; height:100vh; position:relative; }
+  #map { width:100%; height:100%; }
+  #maploading { position:absolute; inset:0; z-index:1100; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:6px; background:rgba(250,250,250,0.82);
+    color:var(--mute); font-size:13px; }
+  #detail { overflow-y:auto; border-top:1px solid var(--line); padding:16px 20px; background:#fff; }
+  h1 { font-size:18px; margin:0 0 2px; }
+  .sub { color:var(--mute); margin:0 0 16px; font-size:12px; }
+  .ctl { margin-bottom:15px; }
+  .ctl label { display:block; font-weight:600; margin-bottom:5px; font-size:12.5px; }
+  input[type=range]{ width:100%; }
+  .val { font-variant-numeric:tabular-nums; color:var(--mute); font-size:12px; }
+  .months { display:grid; grid-template-columns:repeat(6,1fr); gap:4px; }
+  .months button { padding:4px 0; border:1px solid var(--line); background:#fff; border-radius:4px; cursor:pointer; font-size:11px; }
+  .months button.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+  .hint { color:var(--mute); font-size:11.5px; }
+  .tcwrap { position:relative; }
+  .drop { position:absolute; left:0; right:0; top:100%; z-index:2000; background:#fff;
+          border:1px solid var(--line); border-radius:5px; max-height:200px; overflow-y:auto;
+          box-shadow:0 3px 10px rgba(0,0,0,.12); }
+  .drop div { padding:6px 9px; cursor:pointer; font-size:12.5px; }
+  .drop div:hover, .drop div.active { background:#eef3f8; }
+  .chips { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:5px; }
+  .chip { background:#eef3f8; border:1px solid #cfe0ee; border-radius:12px; padding:2px 4px 2px 9px;
+          font-size:11.5px; display:inline-flex; gap:6px; align-items:center; }
+  .chip span { cursor:pointer; color:var(--accent); font-weight:700; padding:0 3px; }
+  #go { width:100%; padding:9px; border:1px solid var(--ink); background:var(--ink); color:#fff;
+        border-radius:5px; cursor:pointer; font-size:14px; font-weight:600; }
+  #go:disabled { opacity:.6; cursor:default; }
+  #status { font-size:12px; color:var(--mute); min-height:16px; margin-top:6px; }
+  .loading { text-align:center; color:var(--mute); font-size:12.5px; padding:18px 0; }
+  .spin { width:26px; height:26px; margin:0 auto 8px; border:3px solid #e2e2e2;
+          border-top-color:var(--accent); border-radius:50%; animation:sp .8s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  .ebird { color:var(--accent); text-decoration:none; font-size:11.5px; }
+  .ebird:hover { text-decoration:underline; }
+  .rec { border:1px solid var(--line); border-radius:6px; padding:9px 10px; margin-bottom:8px; background:#fff; cursor:pointer; display:flex; gap:10px; align-items:flex-start; }
+  .rec:hover { border-color:var(--ink); } .rec.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .badge { flex:0 0 38px; height:38px; border-radius:7px; color:#fff; font-weight:700; font-size:15px;
+           display:flex; align-items:center; justify-content:center; }
+  .rec h3 { margin:0 0 2px; font-size:13.5px; } .rec .meta { color:var(--mute); font-size:12px; }
+  .bird { display:grid; grid-template-columns:62px 1fr; gap:8px; align-items:center; margin:3px 0; font-size:12.5px; }
+  .bird .pct { color:var(--mute); font-variant-numeric:tabular-nums; text-align:right; font-size:11.5px; }
+  .bar { background:#f0f0f0; border-radius:4px; height:18px; position:relative; overflow:hidden; }
+  /* familiar fill from 0 to the likelihood; a soft haze marks the uncertain zone near the top */
+  .bar > .fill { position:absolute; left:0; top:0; bottom:0; border-radius:4px 0 0 4px; background:#8fbad9; }
+  .bar > .fuzz { position:absolute; top:0; bottom:0;
+    background:linear-gradient(90deg, rgba(44,111,166,0.30), rgba(44,111,166,0.05)); }
+  .bar > em { position:absolute; left:7px; top:0; font-style:normal; font-size:11.5px; line-height:18px; color:#1a3a52; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <h1>birdtrip</h1>
+    <p class="sub">Find the best places and times to go birding, from eBird data. Add your life list
+      to find new species, or name target birds to chase specific ones. Every filter is optional —
+      set what you care about and hit Go.</p>
+
+    <div class="ctl">
+      <label>Your life list <span class="hint">(optional)</span></label>
+      <input type="file" id="lifefile" accept=".csv" style="font-size:12px"/>
+      <div id="lifestatus" class="hint">No list — every species counts as a lifer.</div>
+    </div>
+    <div class="ctl">
+      <label>Target species <span class="hint">(optional)</span></label>
+      <div id="targetchips" class="chips"></div>
+      <div class="tcwrap">
+        <input type="text" id="targetinput" autocomplete="off" placeholder="Type a bird name…"
+          style="width:100%;font-size:12px;padding:5px;border:1px solid var(--line);border-radius:4px"/>
+        <div id="targetdrop" class="drop" style="display:none"></div>
+      </div>
+      <div class="hint">Search for these specific birds instead of all lifers.</div>
+    </div>
+    <div class="ctl">
+      <label>When <span class="hint">(optional)</span></label>
+      <div class="months" id="months"></div>
+      <div class="hint" style="margin-top:4px">Click months. None = whole year.</div>
+    </div>
+    <div class="ctl">
+      <label>Favor local specialties: <span class="val" id="aval">0.0</span></label>
+      <input type="range" id="alpha" min="0" max="1" step="0.1" value="0"/>
+      <div class="hint">0 = most birds overall · 1 = up-weight birds hard to get elsewhere</div>
+    </div>
+    <div class="ctl">
+      <label>Target region <span class="hint">(optional)</span></label>
+      <label style="font-weight:400;font-size:12.5px;margin:4px 0;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="lower48"/> Lower 48 only (exclude Alaska &amp; Hawaii)</label>
+      <button id="go">Go</button>
+      <div id="status">Loading regions…</div>
+    </div>
+    <div id="results"></div>
+  </div>
+  <div id="right">
+    <div id="maploading"><div class="spin"></div>Loading locations…</div>
+    <div id="map"></div>
+    <div id="detail"><div class="hint">Pick region(s), hit Go, then click a recommended spot to see its details here.</div></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- US state boundaries (defines window.statesData); Leaflet's own long-hosted file -->
+<script src="https://leafletjs.com/examples/choropleth/us-states.js"></script>
+<script>
+const state = { lifeList:[], weeks:null, k:1, alpha:1.0, regions:new Set(), targets:[], searchStates:null, hasSearched:false };
+const map = L.map('map').setView([39.5,-98.35],4);
+// CARTO Positron basemap — clean, light, free with attribution (nicer than raw OSM tiles)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  {subdomains:'abcd', attribution:'© OpenStreetMap © CARTO', maxZoom:19}).addTo(map);
+const regionLayer = L.layerGroup().addTo(map);
+const recLayer = L.layerGroup().addTo(map);
+const regionLayers = {};   // state name -> leaflet layer (polygon outline, or dot fallback)
+const SEL={color:'#c0392b',weight:2.5,fillColor:'#c0392b',fillOpacity:0.4};
+const UNSEL={color:'#c0392b',weight:1.2,fillColor:'#c0392b',fillOpacity:0.05};
+const dotStyle=s=>({radius:9,color:'#c0392b',weight:2,fillColor:'#c0392b',fillOpacity:s?0.85:0.25});
+let recMarkers = [];        // result index -> marker
+let lastRecs = [];
+let allStates = [];         // every state that has data (for "Lower 48 only")
+const OFF48 = ['Alaska','Hawaii'];
+
+const $ = id => document.getElementById(id);
+const status = m => $('status').textContent = m;
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+async function getJSON(url,opts){
+  let r; try { r=await fetch(url,opts); }
+  catch(e){ throw new Error(`network error reaching ${url} — open http://127.0.0.1:8000 (not the file)?`); }
+  if(!r.ok){ let d=''; try{ d=(await r.json()).detail||''; }catch(_){ } throw new Error(`${url} HTTP ${r.status}${d?' — '+d:''}`); }
+  return r.json();
+}
+function debounce(fn,ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; }
+
+// NOTE: nothing here triggers a SEARCH — adjusting season/specialties only updates the controls.
+// (The species autocomplete does fire lightweight /species lookups, but never a full search.)
+// A recommendation query runs ONLY when the user clicks Go.
+
+// season months
+function selectedWeeks(){
+  const on=[...document.querySelectorAll('.months button.on')].map(b=>+b.dataset.m);
+  if(!on.length) return null; const w=[]; on.forEach(m=>{for(let i=1;i<=4;i++)w.push(m*4+i);}); return w;
+}
+MONTHS.forEach((name,i)=>{ const b=document.createElement('button'); b.textContent=name; b.dataset.m=i;
+  b.onclick=()=>{ b.classList.toggle('on'); state.weeks=selectedWeeks(); }; $('months').appendChild(b); });
+
+$('alpha').oninput = e=>{ state.alpha=+e.target.value; $('aval').textContent=state.alpha.toFixed(1); };
+
+// --- target-species autocomplete (chips store {code,name}) ---
+function renderChips(){
+  $('targetchips').innerHTML = state.targets.map((t,i)=>
+    `<span class="chip">${t.name}<span data-i="${i}" title="remove">×</span></span>`).join('');
+  document.querySelectorAll('#targetchips .chip span').forEach(x=>
+    x.onclick=()=>{ state.targets.splice(+x.dataset.i,1); renderChips(); });
+}
+function addTarget(code,name){
+  if(!state.targets.some(t=>t.code===code)) state.targets.push({code,name});
+  $('targetinput').value=''; $('targetdrop').style.display='none'; renderChips();
+}
+const tdrop=$('targetdrop');
+const aclookup=debounce(async q=>{
+  if(q.length<2){ tdrop.style.display='none'; return; }
+  try{
+    const hits=await getJSON('/species?q='+encodeURIComponent(q));
+    if(!hits.length){ tdrop.style.display='none'; return; }
+    tdrop.innerHTML=hits.map(h=>`<div data-code="${h.species_code}" data-name="${h.common_name.replace(/"/g,'&quot;')}">${h.common_name}</div>`).join('');
+    tdrop.style.display='block';
+    tdrop.querySelectorAll('div').forEach(d=> d.onclick=()=>addTarget(d.dataset.code, d.dataset.name));
+  }catch(e){ tdrop.style.display='none'; }
+}, 160);
+$('targetinput').oninput = e=> aclookup(e.target.value.trim());
+$('targetinput').onblur = ()=> setTimeout(()=>tdrop.style.display='none', 150);  // allow click
+$('lifefile').onchange = async e=>{
+  const f=e.target.files[0]; if(!f) return; const fd=new FormData(); fd.append('file',f);
+  $('lifestatus').textContent='Parsing…';
+  try{ const j=await getJSON('/lifelist',{method:'POST',body:fd}); state.lifeList=j.species_codes||[];
+    $('lifestatus').textContent=`${j.n_species} species on your list — excluded.`; }
+  catch(err){ $('lifestatus').textContent='⚠ '+err.message; }
+};
+
+// region selection: draw the outline of each state that has data; click toggles it in/out
+// of the search set (no search until Go). Falls back to a dot if boundaries can't be loaded.
+const STATES_GEO='https://cdn.jsdelivr.net/gh/PublicaMundi/MappingAPI@master/data/geojson/US-states.geojson';
+const geoReady = (typeof statesData !== 'undefined' && statesData)
+  ? Promise.resolve(statesData)                                   // Leaflet's hosted file (preferred)
+  : fetch(STATES_GEO).then(r=>r.json()).catch(()=>null);          // fallback
+Promise.all([ getJSON('/regions?level=state'), geoReady ]).then(([regs, geo])=>{
+  $('maploading').style.display='none';
+  if(!regs.length){ status('Store empty — build it first.'); return; }
+  allStates = regs.map(g=>g.state);
+  const polyByName={}; if(geo) geo.features.forEach(f=>polyByName[f.properties.name]=f);
+  const bounds=L.latLngBounds([]);
+  regs.forEach(g=>{
+    const poly=polyByName[g.state];
+    if(poly){
+      const layer=L.geoJSON(poly,{style:UNSEL}).addTo(regionLayer);
+      layer.bindTooltip(`${g.state} — ${g.n_hotspots} hotspots`,{sticky:true});
+      layer.on('click',()=>toggleRegion(g.state));
+      regionLayers[g.state]=layer; bounds.extend(layer.getBounds());
+    } else if(g.latitude!=null){
+      const m=L.circleMarker([g.latitude,g.longitude],dotStyle(false)).addTo(regionLayer)
+        .bindTooltip(`${g.state} — ${g.n_hotspots} hotspots`,{direction:'top'});
+      m.on('click',()=>toggleRegion(g.state)); regionLayers[g.state]=m; bounds.extend([g.latitude,g.longitude]);
+    }
+  });
+  status('Click region(s) to select, then Go.');
+  if(bounds.isValid()) map.fitBounds(bounds,{padding:[40,40],maxZoom:6});
+}).catch(e=>{ $('maploading').style.display='none'; status('⚠ '+e.message); });
+
+function toggleRegion(name){
+  const layer=regionLayers[name]; if(!layer) return;
+  const sel=!state.regions.has(name);
+  sel ? state.regions.add(name) : state.regions.delete(name);
+  layer.setStyle(layer.getBounds ? (sel?SEL:UNSEL) : dotStyle(sel));
+  const n=state.regions.size;
+  status(n? `Selected: ${[...state.regions].join(', ')} — hit Go.` : 'None selected — Go searches everywhere.');
+}
+
+// resolve which states to search: explicit selection, else everywhere; "Lower 48" drops AK/HI
+function searchStates(){
+  let sel = [...state.regions];
+  const lower48 = $('lower48').checked;
+  if(!sel.length) sel = lower48 ? allStates.filter(s=>!OFF48.includes(s)) : [];
+  else if(lower48) sel = sel.filter(s=>!OFF48.includes(s));
+  return sel.length ? sel : null;   // null = everywhere
+}
+
+$('go').onclick = ()=>{
+  state.searchStates = searchStates();
+  state.hasSearched=true; runRecommend();
+};
+
+let reqSeq=0;
+async function runRecommend(){
+  const my=++reqSeq;
+  $('go').disabled=true; $('go').textContent='Searching…';
+  const targets = state.targets.map(t=>t.code);
+  $('results').innerHTML='<div class="loading"><div class="spin"></div>'
+    + (targets.length ? 'Finding your target birds…' : 'Finding the best spots…') + '</div>';
+  const body={ life_list:state.lifeList, targets:(targets.length?targets:null), states:state.searchStates,
+               weeks:state.weeks, k:1, alpha:state.alpha, topn:12 };
+  try{
+    const recs=await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(my!==reqSeq) return; renderResults(recs);
+  }catch(e){ if(my===reqSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
+  finally{ if(my===reqSeq){ $('go').disabled=false; $('go').textContent='Go'; } }
+}
+
+// rescale raw alpha-scores to a comprehensible 0-100 "match" (relative to best); ranking unchanged
+function matchColor(v){ return v>=90?'#1a9850':v>=75?'#7fbf3f':v>=60?'#f4c20d':v>=40?'#f39c12':'#bbb'; }
+const lifers = (lo,hi)=> lo===hi ? `${lo}` : `${lo}–${hi}`;   // mean ± 1 SD, rounded
+
+function renderResults(recs){
+  lastRecs=recs; recLayer.clearLayers(); recMarkers=[];
+  if(!recs.length){ $('results').innerHTML='<div class="hint">No hotspots for that selection.</div>'; return; }
+  const maxS=Math.max(...recs.map(d=>d.score))||1;
+  $('results').innerHTML = recs.map((d,i)=>{
+    const v=Math.round(100*d.score/maxS);
+    const where=d.state?`${d.locality} · ${d.state}`:d.locality;
+    return `<div class="rec" data-i="${i}">
+      <div class="badge" style="background:${matchColor(v)}">${v}</div>
+      <div><h3>#${i+1} ${where}</h3>
+      <div class="meta"><b>${lifers(d.lifers_low,d.lifers_high)}</b> expected lifers</div>
+      <div class="meta">Recommended: ${d.recommended_label}</div>
+      <div class="meta"><a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">View on eBird ↗</a></div>
+      </div></div>`;
+  }).join('');
+
+  const pts=[];
+  recs.forEach((d,i)=>{ if(d.latitude==null) return;
+    const mk=L.marker([d.latitude,d.longitude]).addTo(recLayer)
+      .bindTooltip(`#${i+1} ${d.locality}`,{direction:'top'});
+    mk.on('click',()=>selectResult(i));
+    recMarkers[i]=mk; pts.push([d.latitude,d.longitude]);
+  });
+  if(pts.length) map.fitBounds(pts,{padding:[50,50],maxZoom:10});
+  document.querySelectorAll('.rec').forEach(el=> el.onclick=()=>selectResult(+el.dataset.i));
+  renderCurves(recs);
+}
+
+const CURVE_COLORS=['#c0392b','#2c6fa6','#27ae60','#e67e22','#8e44ad','#16a085','#d35400','#2980b9','#c2185b','#607d8b','#00838f','#7cb342'];
+// circular moving average — weeks wrap Dec->Jan, so smoothing across the year boundary is correct
+function smooth(arr, win=7){
+  const n=arr.length, h=(win-1)/2, out=new Array(n);
+  for(let i=0;i<n;i++){ let s=0; for(let j=-h;j<=h;j++) s+=arr[(i+j+n)%n]; out[i]=s/win; }
+  return out;
+}
+// Catmull-Rom spline -> cubic bezier path: smooth curve THROUGH the points (not line segments)
+function smoothPath(pts){
+  if(pts.length<2) return '';
+  let d=`M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for(let i=0;i<pts.length-1;i++){
+    const p0=pts[i-1]||pts[i], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||pts[i+1];
+    const c1x=p1[0]+(p2[0]-p0[0])/6, c1y=p1[1]+(p2[1]-p0[1])/6;
+    const c2x=p2[0]-(p3[0]-p1[0])/6, c2y=p2[1]-(p3[1]-p1[1])/6;
+    d+=` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  return d;
+}
+function backToCurves(e){
+  if(e) e.preventDefault();
+  document.querySelectorAll('.rec').forEach(el=> el.classList.remove('active'));
+  renderCurves(lastRecs);
+}
+function renderCurves(recs){
+  const withCurve=recs.filter(d=>d.weekly && d.weekly.some(v=>v>0));
+  if(!withCurve.length){ return; }
+  const W=680,H=190,padL=6,padB=16,padT=6;
+  const sm=withCurve.map(d=>smooth(d.weekly,7));
+  const max=Math.max(1e-4, ...sm.flat());
+  const X=w=>padL+(w-1)/47*(W-padL-2);
+  const Y=v=>padT+(1-v/max)*(H-padT-padB);
+  const MS=[1,5,9,13,17,21,25,29,33,37,41,45], ML='JFMAMJJASOND';
+  const lines=sm.map((curve,i)=>{
+    const pts=curve.map((v,wi)=>[X(wi+1), Y(v)]);
+    return `<path d="${smoothPath(pts)}" fill="none" stroke="${CURVE_COLORS[i%CURVE_COLORS.length]}" stroke-width="1.8" opacity="0.85" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join('');
+  const ticks=MS.map((w,i)=>`<text x="${X(w).toFixed(1)}" y="${H-3}" font-size="9" fill="#aaa">${ML[i]}</text>`).join('');
+  const legend=withCurve.map((d,i)=>`<span style="white-space:nowrap"><span style="color:${CURVE_COLORS[i%CURVE_COLORS.length]};font-size:14px">■</span> #${recs.indexOf(d)+1} ${d.locality}</span>`).join(' &nbsp; ');
+  $('detail').innerHTML=`<h2 style="margin:0 0 2px;font-size:15px">Seasonality</h2>
+    <div class="hint" style="margin-bottom:4px">Score across the year for each recommended hotspot — click a spot below for its bird list.</div>
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:190px">${lines}${ticks}</svg>
+    <div class="hint" style="margin-top:4px;line-height:1.8">${legend}</div>`;
+}
+
+function selectResult(i){
+  document.querySelectorAll('.rec').forEach(el=> el.classList.toggle('active', +el.dataset.i===i));
+  const d=lastRecs[i];
+  if(d.latitude!=null){ map.setView([d.latitude,d.longitude], Math.max(map.getZoom(),11)); recMarkers[i]&&recMarkers[i].openTooltip(); }
+  showDetail(d);
+}
+
+async function showDetail(d){
+  $('detail').innerHTML='<div class="hint">Loading…</div>';
+  try{
+    const s=await getJSON('/summary',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({locality_id:d.locality_id, week:d.week, k:state.k, life_list:state.lifeList})});
+    const cap = x => Math.min(99, Math.max(1, Math.round(x*100)));   // never show 0% or 100%
+    const rows=s.birds.map(b=>{
+      const p=cap(b.p_trip), lo=cap(b.p_low??b.p_trip), hi=cap(b.p_high??b.p_trip);
+      const rangeTxt = (lo===hi) ? `${lo}%` : `${lo}–${hi}%`;
+      return `<div class="bird"><span class="pct">${rangeTxt}</span>
+        <div class="bar"><span class="fill" style="width:${p}%"></span>
+        <span class="fuzz" style="left:${lo}%;width:${Math.max(2,hi-lo)}%"></span>
+        <em>${b.common_name}</em></div></div>`;
+    }).join('');
+    $('detail').innerHTML=`<a href="#" class="ebird" onclick="backToCurves(event)" style="display:inline-block;margin-bottom:6px">← Seasonality</a>
+      <h2 style="margin:0 0 4px">${s.locality} <span style="color:var(--mute);font-weight:400">· ${d.state||''}</span></h2>
+      <div class="meta" style="color:var(--mute);font-size:12.5px">Recommended: ${d.recommended_label} · effort ${s.effort_checklists} checklist${s.effort_checklists>1?'s':''}
+        · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">View on eBird ↗</a></div>
+      <div style="margin:8px 0 4px;font-size:14px"><b>${lifers(s.lifers_low,s.lifers_high)}</b> expected lifers
+        · chance of seeing at least one new bird: ${s.p_at_least_one>=0.995?'&gt;99%':Math.round(s.p_at_least_one*100)+'%'}</div>
+      <div class="hint" style="margin-bottom:10px">Filled bar = how likely you are to find each · range on the left = our confidence (wider = fewer records)</div>
+      ${rows}`;
+  }catch(e){ $('detail').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
+}
+</script>
+</body>
+</html>

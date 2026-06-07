@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+pytest-cache-files-*/
+build/
+dist/
+.DS_Store
+
+# Personal data — never commit (your eBird life-list export)
+MyEBirdData.csv
+*MyEBirdData*
+
+# Raw eBird data and large generated stores.
+# Reasons: (1) eBird's Terms of Use forbid redistributing the raw dataset, and
+# (2) these are huge / regenerable. Ignore everything under data/ EXCEPT the small,
+# safe fixtures needed to run the tests: the published taxonomy and the synthetic
+# precomputed sample. Everything else (EBD .gz/.txt, sampling files, bar charts,
+# .sqlite/.parquet stores, duckdb scratch) stays local.
+data/*
+!data/taxonomy/
+!data/precomputed.csv
+
+# belt-and-suspenders for big artifacts anywhere
+*.gz
+*.tar
+*.zip
+*.sqlite
+*.parquet
+duckdb_tmp/
