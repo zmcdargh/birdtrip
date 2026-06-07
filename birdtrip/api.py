@@ -145,6 +145,27 @@ def summary(req: SummaryReq):
     return service.trip_summary(_store(), req.locality_id, req.week, k=req.k, life_list=req.life_list)
 
 
+class ItineraryReq(BaseModel):
+    base_lat: float = Field(..., ge=-90, le=90, description="base-camp pin latitude")
+    base_lon: float = Field(..., ge=-180, le=180, description="base-camp pin longitude")
+    radius_km: float = Field(75.0, gt=0, le=1000, description="how far you'll day-trip from the base")
+    start_date: str = Field(..., description="trip start, YYYY-MM-DD")
+    n_days: int = Field(..., ge=1, le=30, description="trip length in days")
+    k_per_day: int = Field(4, ge=1, description="checklists of effort per day at a stop")
+    alpha: float = Field(0.0, ge=0, description="favor local specialties (0 = max expected lifers)")
+    life_list: list[str] = Field(default_factory=list, description="species codes already seen")
+    targets: list[str] | None = Field(default=None, description="restrict to these species codes")
+    max_sites: int = Field(80, ge=1, le=300, description="cap on candidate hotspots considered")
+
+
+@app.post("/itinerary")
+def itinerary(req: ItineraryReq):
+    return service.plan_itinerary(
+        _store(), base_lat=req.base_lat, base_lon=req.base_lon, radius_km=req.radius_km,
+        start_date=req.start_date, n_days=req.n_days, k_per_day=req.k_per_day, alpha=req.alpha,
+        life_list=req.life_list, targets=req.targets, max_sites=req.max_sites)
+
+
 class TargetsReq(BaseModel):
     names: list[str] = Field(default_factory=list, description="must-see birds (common or scientific)")
     states: list[str] | None = None

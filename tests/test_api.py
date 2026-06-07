@@ -84,6 +84,64 @@ def test_summary_excludes_life_list(client):
     assert fewer["expected_lifers"] <= base["expected_lifers"]
 
 
+# --- itinerary builder -------------------------------------------------------
+# Central Park (40.78, -73.97) and Montauk Point (41.07, -71.86) are the two synthetic
+# hotspots; a base at Central Park with a 200 km radius reaches both. Starting May 1 for
+# a few days keeps every day inside one eBird week (17), so marginal gains must be monotone.
+CP = dict(base_lat=40.78, base_lon=-73.97)
+
+
+def test_itinerary_basic(client):
+    body = {**CP, "radius_km": 200, "start_date": "2026-05-01", "n_days": 3, "k_per_day": 4}
+    r = client.post("/itinerary", json=body)
+    assert r.status_code == 200
+    plan = r.json()
+    assert len(plan["days"]) == 3 and plan["n_candidate_sites"] >= 2
+    assert plan["expected_lifers_total"] > 0
+    cum = [d["cumulative_expected"] for d in plan["days"]]
+    assert cum == sorted(cum)                                  # cumulative never decreases
+    assert all(d["locality"] for d in plan["days"])            # every day got a stop
+    # cumulative of the last day equals the trip total, and equals the sum of daily gains
+    assert abs(cum[-1] - plan["expected_lifers_total"]) < 0.05
+    assert abs(sum(d["expected_new"] for d in plan["days"]) - plan["expected_lifers_total"]) < 0.05
+
+
+def test_itinerary_marginal_gains_monotone(client):
+    # submodular coverage under greedy: each day's marginal expected-new can't exceed the prior day's
+    body = {**CP, "radius_km": 200, "start_date": "2026-05-01", "n_days": 4}
+    days = client.post("/itinerary", json=body).json()["days"]
+    gains = [d["expected_new"] for d in days]
+    assert all(gains[i] <= gains[i - 1] + 1e-6 for i in range(1, len(gains)))
+
+
+def test_itinerary_revisit_diminishes(client):
+    # tiny radius -> only Central Park reachable, so a 2-day trip must revisit it.
+    body = {**CP, "radius_km": 5, "start_date": "2026-05-01", "n_days": 2}
+    plan = client.post("/itinerary", json=body).json()
+    assert plan["n_candidate_sites"] == 1
+    d1, d2 = plan["days"]
+    assert d1["locality_id"] == d2["locality_id"] and d2["revisit"] is True
+    # occupancy-once conditioning: the second day adds strictly less, and the total is below 2x day-1
+    assert d2["expected_new"] < d1["expected_new"]
+    assert plan["expected_lifers_total"] < 2 * d1["expected_new"]
+
+
+def test_itinerary_life_list_reduces_total(client):
+    base = {**CP, "radius_km": 200, "start_date": "2026-05-01", "n_days": 2}
+    full = client.post("/itinerary", json=base).json()
+    seen = [full["days"][0]["birds"][0]["species_code"]]       # remove the top expected bird
+    fewer = client.post("/itinerary", json={**base, "life_list": seen}).json()
+    assert fewer["expected_lifers_total"] <= full["expected_lifers_total"]
+
+
+def test_itinerary_out_of_range_base(client):
+    # a base in the middle of the Pacific reaches nothing -> graceful empty plan
+    body = {"base_lat": 0.0, "base_lon": -150.0, "radius_km": 50,
+            "start_date": "2026-05-01", "n_days": 2}
+    plan = client.post("/itinerary", json=body).json()
+    assert plan["expected_lifers_total"] == 0.0 and plan["days"] == [] and "message" in plan
+
+
 def test_lifelist_upload(client, tmp_path):
     p = tmp_path / "MyEBirdData.csv"
     with open(p, "w", newline="") as f:

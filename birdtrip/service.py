@@ -12,6 +12,7 @@ import pandas as pd
 from .store import Store
 from .recommend import rank_destinations, month_of_week, ELSEWHERE_FLOOR
 from .summary import p_lifer_k, poisson_binomial
+from . import itinerary as _itin
 
 _DUCK = None            # shared DuckDB connection (created lazily)
 _DUCK_LOCK = threading.Lock()   # serialize access: FastAPI serves requests on multiple threads,
@@ -422,6 +423,69 @@ def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ
             "longitude": (None if pd.isna(best.longitude) else round(float(best.longitude), 5)),
         })
     return out
+
+
+def _candidate_sites(store, pq, base_lat, base_lon, radius_km, max_sites=80) -> pd.DataFrame:
+    """Hotspots reachable from the base pin: bbox prefilter (cheap at US scale) then exact
+    haversine, nearest-first, capped at max_sites."""
+    import math
+    dlat = radius_km / 111.0
+    dlon = radius_km / max(1e-6, 111.0 * math.cos(math.radians(base_lat)))
+    lat0, lat1, lon0, lon1 = base_lat - dlat, base_lat + dlat, base_lon - dlon, base_lon + dlon
+    if pq:
+        df = _q(f"SELECT locality_id, any_value(locality) locality, any_value(state) state, "
+                f"avg(latitude) latitude, avg(longitude) longitude FROM '{pq}' "
+                f"WHERE trusted=1 AND latitude BETWEEN {lat0} AND {lat1} "
+                f"AND longitude BETWEEN {lon0} AND {lon1} GROUP BY locality_id")
+    else:
+        d = _slice(store)
+        if d.empty:
+            return d
+        d = d.dropna(subset=["latitude", "longitude"])
+        d = d[d["latitude"].between(lat0, lat1) & d["longitude"].between(lon0, lon1)]
+        df = (d.groupby("locality_id")
+                .agg(locality=("locality", "first"), state=("state", "first"),
+                     latitude=("latitude", "mean"), longitude=("longitude", "mean"))
+                .reset_index())
+    if df.empty:
+        return df
+    df["dist_km"] = _itin.haversine_km(base_lat, base_lon,
+                                       df["latitude"].to_numpy(float), df["longitude"].to_numpy(float))
+    return df[df["dist_km"] <= radius_km].sort_values("dist_km").head(max_sites).reset_index(drop=True)
+
+
+def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_days,
+                   k_per_day=4, alpha=0.0, life_list=(), targets=None, occ_gate=0.5,
+                   max_sites=80) -> dict:
+    """Base-camp itinerary: pick + radius + dates -> a greedy day-by-day plan. See itinerary.plan."""
+    pq = _parquet(store)
+    sites = _candidate_sites(store, pq, float(base_lat), float(base_lon), float(radius_km), max_sites)
+    start = _itin._parse_date(start_date)
+    if sites.empty:
+        return _itin._empty(start, n_days, k_per_day, sites)
+    locids = sites["locality_id"].tolist()
+    wks = _itin.trip_weeks(start, int(n_days))
+    targets = list(targets) if targets else None
+    life_list = list(life_list)
+    cols = ["locality_id", "week", "species_code", "common_name", "occupancy",
+            "detect_given_present", "w"]
+    if pq:
+        where = [f"locality_id IN {_inlist(locids)}",
+                 f"week IN ({','.join(str(int(w)) for w in wks)})", "trusted=1"]
+        if targets:
+            where.append(f"species_code IN {_inlist(targets)}")
+        elif life_list:
+            where.append(f"species_code NOT IN {_inlist(life_list)}")
+        cells = _q(f"SELECT {', '.join(cols)} FROM '{pq}' WHERE {' AND '.join(where)}")
+    else:
+        cells = _slice(store, occ_gate, locality_ids=locids, weeks=wks)
+        if not cells.empty:
+            if targets:
+                cells = cells[cells["species_code"].isin(set(targets))]
+            elif life_list:
+                cells = cells[~cells["species_code"].isin(set(life_list))]
+            cells = cells[cols].copy()
+    return _itin.plan(cells, sites, start, n_days, k_per_day=k_per_day, alpha=alpha)
 
 
 def regions(store: Store, level="state") -> list[dict]:
