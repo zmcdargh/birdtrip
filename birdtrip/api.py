@@ -80,7 +80,8 @@ class RecommendReq(BaseModel):
     state: str | None = None   # back-compat single
     county: str | None = None
     weeks: list[int] | None = Field(default=None, description="eBird weeks 1-48 (the season)")
-    k: int = Field(1, ge=1, description="complete checklists of effort")
+    k: int = Field(1, ge=1, description="complete checklists of effort (fallback when no lambda)")
+    hours: float | None = Field(None, gt=0, le=24, description="hours of birding (preferred effort unit; uses per-hour rates when the store has them)")
     alpha: float = Field(1.0, ge=0, description="rarity slider: 0=most birds, higher=specialties")
     occ_gate: float = Field(0.5, ge=0, le=1)
     topn: int = Field(5, ge=1, le=50)
@@ -90,6 +91,7 @@ class SummaryReq(BaseModel):
     locality_id: str
     week: int = Field(..., ge=1, le=48)
     k: int = Field(6, ge=1)
+    hours: float | None = Field(None, gt=0, le=24, description="hours of birding (preferred effort unit)")
     life_list: list[str] = Field(default_factory=list)
 
 
@@ -137,12 +139,14 @@ def species(q: str = ""):
 def recommend(req: RecommendReq):
     return service.recommend_trips(
         _store(), life_list=req.life_list, targets=req.targets, states=req.states, state=req.state,
-        county=req.county, weeks=req.weeks, k=req.k, alpha=req.alpha, occ_gate=req.occ_gate, topn=req.topn)
+        county=req.county, weeks=req.weeks, k=req.k, hours=req.hours, alpha=req.alpha,
+        occ_gate=req.occ_gate, topn=req.topn)
 
 
 @app.post("/summary")
 def summary(req: SummaryReq):
-    return service.trip_summary(_store(), req.locality_id, req.week, k=req.k, life_list=req.life_list)
+    return service.trip_summary(_store(), req.locality_id, req.week, k=req.k, hours=req.hours,
+                                life_list=req.life_list)
 
 
 class ItineraryReq(BaseModel):
@@ -151,7 +155,7 @@ class ItineraryReq(BaseModel):
     radius_km: float = Field(75.0, gt=0, le=1000, description="how far you'll day-trip from the base")
     start_date: str = Field(..., description="trip start, YYYY-MM-DD")
     n_days: int = Field(..., ge=1, le=30, description="trip length in days")
-    k_per_day: int = Field(4, ge=1, description="checklists of effort per day at a stop")
+    hours_per_day: float = Field(4.0, gt=0, le=24, description="hours of birding per day at a stop")
     alpha: float = Field(0.0, ge=0, description="favor local specialties (0 = max expected lifers)")
     life_list: list[str] = Field(default_factory=list, description="species codes already seen")
     targets: list[str] | None = Field(default=None, description="restrict to these species codes")
@@ -162,7 +166,7 @@ class ItineraryReq(BaseModel):
 def itinerary(req: ItineraryReq):
     return service.plan_itinerary(
         _store(), base_lat=req.base_lat, base_lon=req.base_lon, radius_km=req.radius_km,
-        start_date=req.start_date, n_days=req.n_days, k_per_day=req.k_per_day, alpha=req.alpha,
+        start_date=req.start_date, n_days=req.n_days, hours_per_day=req.hours_per_day, alpha=req.alpha,
         life_list=req.life_list, targets=req.targets, max_sites=req.max_sites)
 
 

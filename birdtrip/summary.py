@@ -29,6 +29,14 @@ def p_lifer_k(occupancy, detect_given_present, k):
     return occupancy * (1 - (1 - detect_given_present) ** k)
 
 
+def p_lifer_hours(occupancy, lambda_hr, hours):
+    """Duration-explicit detection: occupancy * (1 - exp(-lambda * hours)), where lambda is the
+    per-hour encounter rate (see scripts/precompute_duckdb.py). The hours-based replacement for the
+    abstract k-checklist p_lifer_k."""
+    import numpy as _np
+    return occupancy * (1 - _np.exp(-lambda_hr * hours))
+
+
 def poisson_binomial(probs):
     """Distribution of the count of successes among independent Bernoulli(probs)."""
     dist = np.array([1.0])

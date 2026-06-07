@@ -39,11 +39,61 @@ MIN_CHECKLISTS_YEAR = 3
 PRIOR_STRENGTH = 10.0     # for freq_shrunk
 DGP_PRIOR = 5.0          # Beta prior strength for the detection-rate posterior
 OCC_GATE = 0.5           # min occupancy for a species to earn a region-relative weight > 1
+OCC_PRIOR_YEARS = 2      # pseudo unsurveyed-years added when gating: stops a 1-of-1-year vagrant
+                         # (e.g. the 2018 Great Black Hawk in Maine) from reading as a certain
+                         # resident (occ=1.0) and earning a huge specialty weight. Only affects the
+                         # rarity gate; the displayed per-cell occupancy stays the raw ratio.
 W_FLOOR = 1e-3           # floor on elsewhere-attainability (ratio denominator)
 LOOKBACK_YEARS = 10
 DEFAULT_TAX = ROOT / "data" / "taxonomy" / "eBird_taxonomy_v2025-4.csv"
 
 WEEK = "((month(d) - 1) * 4 + least(3, CAST(floor((day(d) - 1) / 7.0) AS INTEGER)) + 1)"
+
+# duration buckets (minutes) for the per-CELL duration histogram used to deconvolve lambda.
+DUR_BUCKETS = [(0, 15), (15, 30), (30, 60), (60, 120), (120, 240), (240, 100000)]
+
+
+def _lambda_sql(src: str, n_iter: int = 14) -> str:
+    """Return SQL that adds a per-hour encounter rate `lambda_hr` to `src` by DECONVOLVING the
+    per-checklist detection frequency against the *cell's* duration histogram. We assume the shared
+    Poisson shape  P(detect|present, t) = 1 - exp(-lambda*t)  and solve, per (cell, species),
+
+        detect_given_present = sum_b f_b * (1 - exp(-lambda * T_b))
+
+    for lambda — where {f_b, T_b} is the cell's duration histogram (estimated from ALL its
+    checklists, so it's data-rich and shared across species; the per-species input is only the
+    single detection frequency, never re-binned). Newton iteration, started from the
+    homogeneous-duration plug-in  -ln(1-dgp)/mean_dur. `src` must expose detect_given_present,
+    mean_dur_min, n_dur, and n1.. / t1.. per bucket (t in minutes). lambda_hr is NULL where the cell
+    has no usable durations, so the serve layer can fall back to the checklist-count model."""
+    nb = len(DUR_BUCKETS)
+    feats = []
+    for i in range(1, nb + 1):
+        feats.append(f"CASE WHEN n_dur>0 THEN COALESCE(n{i},0)::DOUBLE/n_dur ELSE 0 END AS f{i}")
+        feats.append(f"COALESCE(t{i},0)/60.0 AS th{i}")              # bucket mean duration, hours
+    feats.append("CASE WHEN n_dur>0 AND mean_dur_min>0 "
+                 "THEN -ln(1-least(0.999,detect_given_present))/(mean_dur_min/60.0) ELSE NULL END AS lam")
+    q = f"(SELECT *, {', '.join(feats)} FROM {src})"
+    E = " + ".join(f"f{i}*exp(-lam*th{i})" for i in range(1, nb + 1))          # sum f_b exp(-lam T_b)
+    Ep = " + ".join(f"f{i}*th{i}*exp(-lam*th{i})" for i in range(1, nb + 1))   # its derivative wrt lam
+    step = (f"CASE WHEN lam IS NULL OR ({Ep})<=1e-12 THEN lam "
+            f"ELSE least(1e4, greatest(1e-6, lam - ((1.0-({E})) - detect_given_present)/({Ep}))) END")
+    for _ in range(n_iter):
+        q = f"(SELECT * EXCLUDE(lam), {step} AS lam FROM {q})"
+    drop = ", ".join([f"f{i}" for i in range(1, nb + 1)] + [f"th{i}" for i in range(1, nb + 1)]
+                     + ["n_dur"] + [f"n{i}" for i in range(1, nb + 1)] + [f"t{i}" for i in range(1, nb + 1)])
+    return f"SELECT * EXCLUDE({drop}, lam), lam AS lambda_hr FROM {q}"
+
+
+def _dur_hist_sql() -> str:
+    """Per-(locid, week) duration histogram: total + per-bucket count and mean duration."""
+    cols = ["COUNT(dur) n_dur", "avg(dur) mean_dur_min"]
+    for i, (lo, hi) in enumerate(DUR_BUCKETS, 1):
+        cond = f"dur>{lo} AND dur<={hi}" if i > 1 else f"dur<={hi}"
+        cols.append(f"COUNT(*) FILTER (WHERE {cond}) n{i}")
+        cols.append(f"avg(dur) FILTER (WHERE {cond}) t{i}")
+    return ("SELECT locid, week, " + ", ".join(cols)
+            + " FROM chk WHERE dur IS NOT NULL AND dur > 0 GROUP BY 1,2")
 
 
 def read_csv(path):  # the EBD / SED are tab-delimited
@@ -103,11 +153,12 @@ def main():
     con.execute(f"""
     COPY (
       SELECT t.species_code, x.state, x.state_code, x.county, x.locality, x.locid,
-             x.lat, x.lon, x.sei, x.yr, x.week
+             x.lat, x.lon, x.sei, x.yr, x.week, x.dur
       FROM (
         SELECT "SCIENTIFIC NAME" AS sci, "STATE" AS state, "STATE CODE" AS state_code,
                "COUNTY" AS county, "LOCALITY" AS locality, "LOCALITY ID" AS locid,
                TRY_CAST("LATITUDE" AS DOUBLE) AS lat, TRY_CAST("LONGITUDE" AS DOUBLE) AS lon,
+               TRY_CAST("DURATION MINUTES" AS DOUBLE) AS dur,
                "SAMPLING EVENT IDENTIFIER" AS sei, CAST(year(d) AS INTEGER) AS yr, {WEEK} AS week
         FROM (SELECT *, {d_ebd} AS d FROM {read_csv(a.ebd)})
         WHERE "ALL SPECIES REPORTED"='1' AND "APPROVED"='1' AND d IS NOT NULL
@@ -121,13 +172,14 @@ def main():
     if a.sed:
         d_sed = 'TRY_CAST("OBSERVATION DATE" AS DATE)'
         con.execute(f"""CREATE TEMP TABLE chk AS SELECT DISTINCT "SAMPLING EVENT IDENTIFIER" AS sei,
-          "LOCALITY ID" AS locid, "STATE" AS state, CAST(year(d) AS INTEGER) AS yr, {WEEK} AS week
+          "LOCALITY ID" AS locid, "STATE" AS state, CAST(year(d) AS INTEGER) AS yr, {WEEK} AS week,
+          TRY_CAST("DURATION MINUTES" AS DOUBLE) AS dur
           FROM (SELECT *, {d_sed} AS d FROM {read_csv(a.sed)})
           WHERE "ALL SPECIES REPORTED"='1' AND d IS NOT NULL AND "LOCALITY TYPE"='H'
             AND year(d) BETWEEN {min_year} AND {max_year};""")
     else:
         con.execute(f"""CREATE TEMP TABLE chk AS SELECT sei, any_value(locid) locid,
-          any_value("week") "week", any_value(yr) yr, any_value(state) state
+          any_value("week") "week", any_value(yr) yr, any_value(state) state, any_value(dur) dur
           FROM '{obs_pq}' GROUP BY sei;""")
     con.execute(f"""CREATE TEMP TABLE locmeta AS SELECT locid, any_value(locality) locality,
         any_value(state) state, any_value(state_code) state_code, any_value(county) county,
@@ -184,17 +236,33 @@ def main():
       {trusted_filter}
     """
     # derive shrunk detection rate + p_lifer from det_a/det_b, then the region-relative weight w
-    con.execute(f"CREATE TEMP TABLE cells0 AS SELECT *, least(1.0, det_a/(det_a+det_b)) AS detect_given_present, "
-                f"occupancy * least(1.0, det_a/(det_a+det_b)) AS p_lifer_1 FROM ({core});")
-    con.execute("CREATE TEMP TABLE sb AS SELECT state, species_code, MAX(p_lifer_1) f, MAX(occupancy) occ "
-                "FROM cells0 GROUP BY 1,2;")
+    con.execute(f"""CREATE TEMP TABLE cells0 AS
+        SELECT *, least(1.0, det_a/(det_a+det_b)) AS detect_given_present,
+               occupancy * least(1.0, det_a/(det_a+det_b)) AS p_lifer_1
+        FROM ({core});""")
+    # per-CELL duration histogram (shared across species in the cell — estimated from all its
+    # checklists, so it stays data-rich and never shatters the per-species detection statistic).
+    con.execute(f"CREATE TEMP TABLE dur_h AS {_dur_hist_sql()};")
+    # occ used for the rarity GATE is shrunk by OCC_PRIOR_YEARS pseudo unsurveyed years, so a species
+    # seen in (say) the only surveyed year can't pass the gate on a sample of one. f (region
+    # attainability, the ratio numerator) stays the raw best p_lifer_1 — only eligibility changes.
+    con.execute(f"CREATE TEMP TABLE sb AS SELECT state, species_code, MAX(p_lifer_1) f, "
+                f"MAX(CASE WHEN years_surveyed>0 THEN years_present::DOUBLE/(years_surveyed+{OCC_PRIOR_YEARS}) "
+                f"ELSE 0 END) occ FROM cells0 GROUP BY 1,2;")
     con.execute(f"""CREATE TEMP TABLE wtab AS SELECT a.state, a.species_code,
         CASE WHEN a.occ < {OCC_GATE} THEN 1.0
              ELSE greatest(1.0, a.f / greatest(
                  COALESCE((SELECT MAX(b.f) FROM sb b WHERE b.species_code=a.species_code AND b.state<>a.state), 0.0),
                  {W_FLOOR})) END AS w
         FROM sb a;""")
-    final = ("SELECT c.* EXCLUDE (_nchk_keep), wtab.w FROM cells0 c "
+    # attach the per-cell duration histogram, then deconvolve a per-hour rate lambda_hr per cell-species
+    nb = len(DUR_BUCKETS)
+    histcols = ", ".join(["dh.mean_dur_min", "dh.n_dur"]
+                         + [f"dh.n{i}, dh.t{i}" for i in range(1, nb + 1)])
+    con.execute(f"""CREATE TEMP TABLE cellsh AS SELECT c.*, {histcols}
+        FROM cells0 c LEFT JOIN dur_h dh ON dh.locid=c.locality_id AND dh.week=c.week;""")
+    con.execute(f"CREATE TEMP TABLE cells_l AS {_lambda_sql('cellsh')};")
+    final = ("SELECT c.* EXCLUDE (_nchk_keep), wtab.w FROM cells_l c "
              "JOIN wtab USING (state, species_code)")
 
     if is_sqlite:
@@ -229,7 +297,8 @@ def main():
             locality AS "LOCALITY", locality_id AS "LOCALITY ID", latitude, longitude, week,
             sci_name AS "SCIENTIFIC NAME", common_name AS "COMMON NAME", n_checklists, n_detections,
             freq_raw, freq_shrunk, years_surveyed, years_present, occupancy,
-            detect_given_present, p_lifer_1, det_a, det_b, w, trusted FROM ({final})"""
+            detect_given_present, p_lifer_1, det_a, det_b, w, mean_dur_min, lambda_hr, trusted
+            FROM ({final})"""
         con.execute(f"COPY ({up}) TO '{a.out}' (HEADER, DELIMITER ',');")
         n = con.execute(f"SELECT COUNT(*) FROM read_csv('{a.out}', delim=',', header=true)").fetchone()[0]
     Path(obs_pq).unlink(missing_ok=True)   # remove the intermediate scan file

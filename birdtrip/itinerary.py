@@ -75,16 +75,20 @@ def _parse_date(d) -> date:
 
 
 def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
-         k_per_day: int = 4, alpha: float = 0.0, max_per_species_report: int = 8) -> dict:
+         hours_per_day: float = 4.0, alpha: float = 0.0, has_lambda: bool = False,
+         max_per_species_report: int = 8) -> dict:
     """Greedy itinerary over a prepared candidate set.
 
     cells : per-(locality_id, week, species) rows with columns
             locality_id, week, species_code, common_name, occupancy, detect_given_present, w
-            (already restricted to candidate localities, trip weeks, and off the life list).
+            (and lambda_hr when has_lambda) — restricted to candidate localities, trip weeks, off
+            the life list.
     sites : one row per candidate locality with locality_id, locality, state, latitude,
             longitude, dist_km (distance from base).
-    Returns a JSON-serializable dict (see module docstring / API).
+    Effort is hours_per_day: detection given present over a day = 1-exp(-lambda*hours) where lambda
+    is available, else the k-checklist fallback with k≈round(hours). Returns a JSON dict.
     """
+    kfb = max(1, int(round(hours_per_day)))
     start = _parse_date(start_date)
     n_days = int(n_days)
     days_dates = [start + timedelta(days=i) for i in range(n_days)]
@@ -93,7 +97,7 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
     site_meta = {r.locality_id: r for r in sites.itertuples()}
 
     if cells.empty or not site_meta:
-        return _empty(start, n_days, k_per_day, sites)
+        return _empty(start, n_days, hours_per_day, sites)
 
     # --- index the candidate data: per (locality_id, week) -> aligned arrays over a species universe
     cells = cells.dropna(subset=["occupancy", "detect_given_present"]).copy()
@@ -116,9 +120,16 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
     for (loc, wk), g in cells.groupby(["locality_id", "week"]):
         idx = np.array([sidx[c] for c in g["species_code"].astype(str)])
         occ = np.zeros(S); occ[idx] = np.clip(g["occupancy"].to_numpy(float), 0, 1)
-        dgp = np.zeros(S); dgp[idx] = np.clip(g["detect_given_present"].to_numpy(float), 0, 1)
+        dgpv = np.clip(g["detect_given_present"].to_numpy(float), 0, 1)
+        if has_lambda and "lambda_hr" in g.columns:           # time-to-detection, per-row fallback
+            lam = pd.to_numeric(g["lambda_hr"], errors="coerce").to_numpy()
+            dpos = np.where(np.isnan(lam), 1.0 - (1.0 - dgpv) ** kfb,
+                            1.0 - np.exp(-np.nan_to_num(lam) * float(hours_per_day)))
+        else:
+            dpos = 1.0 - (1.0 - dgpv) ** kfb
+        D = np.zeros(S); D[idx] = np.clip(dpos, 0, 1)
         O_cell[(loc, int(wk))] = occ
-        D_cell[(loc, int(wk))] = 1.0 - (1.0 - dgp) ** int(k_per_day)
+        D_cell[(loc, int(wk))] = D
 
     # --- greedy state ---------------------------------------------------------
     # F[loc] = per-species product of (1 - D) over days already spent at loc (failure-given-present).
@@ -198,7 +209,7 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
 
     total = float((1.0 - still).sum())          # expected distinct lifers over whole trip
     return {
-        "start_date": start.isoformat(), "n_days": n_days, "k_per_day": int(k_per_day),
+        "start_date": start.isoformat(), "n_days": n_days, "hours_per_day": round(float(hours_per_day), 1),
         "alpha": float(alpha), "n_candidate_sites": len(site_meta),
         "expected_lifers_total": round(total, 1),
         "days": days_out,
@@ -206,8 +217,9 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
     }
 
 
-def _empty(start, n_days, k_per_day, sites):
-    return {"start_date": start.isoformat(), "n_days": int(n_days), "k_per_day": int(k_per_day),
+def _empty(start, n_days, hours_per_day, sites):
+    return {"start_date": start.isoformat(), "n_days": int(n_days),
+            "hours_per_day": round(float(hours_per_day), 1),
             "n_candidate_sites": 0 if sites is None else int(len(sites)),
             "expected_lifers_total": 0.0, "days": [], "stops": [],
             "message": "No hotspots with data were reachable from this base. Try a larger radius."}

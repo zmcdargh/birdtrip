@@ -52,6 +52,44 @@ def _inlist(vals) -> str:
     return "(" + ",".join(_lit(v) for v in vals) + ")"
 
 
+# --- effort model: P(detect | present) at a given number of HOURS of birding ---------------
+# When the store carries a per-hour rate lambda_hr (built by the duration-aware precompute) we use
+# the time-to-detection form 1 - exp(-lambda*hours); otherwise (older store / synthetic test store)
+# we fall back to the abstract k-checklist model 1 - (1-dgp)^k, so nothing breaks before a rebuild.
+_HAS_LAMBDA: dict = {}
+
+
+def _has_lambda(store: Store) -> bool:
+    if store.db_path not in _HAS_LAMBDA:
+        pq = _parquet(store)
+        if pq:
+            cols = set(_q(f"SELECT * FROM '{pq}' LIMIT 0").columns)
+        else:
+            import sqlite3
+            cols = {r[1] for r in sqlite3.connect(store.db_path).execute("PRAGMA table_info(cells)")}
+        _HAS_LAMBDA[store.db_path] = "lambda_hr" in cols
+    return _HAS_LAMBDA[store.db_path]
+
+
+def _pdetect_sql(hours, k, has_lambda) -> str:
+    """SQL fragment for P(detect | present). Per-row fallback to the k-model where lambda_hr is NULL."""
+    if has_lambda:
+        h = float(hours); kfb = max(1, int(round(h)))
+        return (f"(1 - CASE WHEN lambda_hr IS NOT NULL THEN exp(-lambda_hr*{h}) "
+                f"ELSE pow(1 - detect_given_present, {kfb}) END)")
+    return f"(1 - pow(1 - detect_given_present, {int(k)}))"
+
+
+def _pdetect(df: pd.DataFrame, hours, k, has_lambda):
+    """Vectorized P(detect | present) over a frame (numpy array). Mirrors _pdetect_sql."""
+    if has_lambda and "lambda_hr" in df.columns:
+        h = float(hours); kfb = max(1, int(round(h)))
+        lam = pd.to_numeric(df["lambda_hr"], errors="coerce")
+        dgp = df["detect_given_present"].astype(float)
+        return np.where(lam.notna(), 1 - np.exp(-lam.fillna(0.0) * h), 1 - (1 - dgp) ** kfb)
+    return (1 - (1 - df["detect_given_present"].astype(float)) ** int(k)).to_numpy()
+
+
 _SPECIES_CACHE: dict = {}
 
 
@@ -81,7 +119,7 @@ def species_search(store: Store, q: str, limit: int = 12) -> list[dict]:
 
 
 def _cell_scores(pq, alpha, k, states=None, weeks=None, life_list=(), locality_ids=None,
-                 targets=None) -> pd.DataFrame:
+                 targets=None, hours=None, has_lambda=False) -> pd.DataFrame:
     """Per-(hotspot, week) score, computed in DuckDB over the Parquet. Returns a small frame.
     `targets` restricts the candidate species to those (search FOR those birds); otherwise the
     candidate pool is all species minus the life list."""
@@ -96,8 +134,8 @@ def _cell_scores(pq, alpha, k, states=None, weeks=None, life_list=(), locality_i
         where.append(f"species_code IN {_inlist(targets)}")
     elif life_list:
         where.append(f"species_code NOT IN {_inlist(life_list)}")
-    sql = (f"SELECT locality_id, week, SUM(pow(w,{float(alpha)}) * occupancy * "
-           f"(1 - pow(1 - detect_given_present, {int(k)}))) AS score "
+    pdet = _pdetect_sql(k if hours is None else hours, k, has_lambda)
+    sql = (f"SELECT locality_id, week, SUM(pow(w,{float(alpha)}) * occupancy * {pdet}) AS score "
            f"FROM '{pq}' WHERE {' AND '.join(where)} GROUP BY locality_id, week")
     return _q(sql)
 
@@ -249,15 +287,18 @@ def _regionwise_weights(state_best, occ_gate: float) -> dict:
 
 
 def recommend_trips(store: Store, life_list=(), states=None, state=None, county=None, weeks=None,
-                    k=1, alpha=1.0, occ_gate=0.5, topn=5, targets=None) -> list[dict]:
-    """Rank (locality, week) destinations by rarity-weighted expected lifers at effort k.
-    `states` is a list (multi-select); empty/None means search everywhere. `targets` (species
-    codes) restricts the search to those birds — every other filter is just a restriction too."""
+                    k=1, alpha=1.0, occ_gate=0.5, topn=5, targets=None, hours=None) -> list[dict]:
+    """Rank (locality, week) destinations by rarity-weighted expected lifers. Effort is `hours` of
+    birding when the store has per-hour rates (lambda_hr), else `k` checklists. `states` is a list
+    (multi-select); empty/None means everywhere. `targets` (species codes) restricts the search."""
     targets = list(targets) if targets else None
+    has_lambda = _has_lambda(store)
+    if hours is None:
+        hours = float(k)
     pq = _parquet(store)
     if pq:   # scalable path: score in DuckDB over Parquet, fetch details for top hotspots only
         return _recommend_via_parquet(store, pq, list(life_list), states or ([state] if state else None),
-                                      weeks, k, alpha, occ_gate, topn, targets)
+                                      weeks, k, alpha, occ_gate, topn, targets, hours, has_lambda)
 
     region = _slice(store, occ_gate, states=states, state=state, county=county, weeks=weeks)
     if region.empty:
@@ -331,13 +372,18 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
     return out
 
 
-def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_gate, topn, targets=None):
-    cs = _cell_scores(pq, alpha, k, states=states, weeks=weeks, life_list=life_list, targets=targets)
+def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_gate, topn, targets=None,
+                           hours=None, has_lambda=False):
+    if hours is None:
+        hours = float(k)
+    cs = _cell_scores(pq, alpha, k, states=states, weeks=weeks, life_list=life_list, targets=targets,
+                      hours=hours, has_lambda=has_lambda)
     if cs.empty:
         return []
     peaks = cs.loc[cs.groupby("locality_id")["score"].idxmax()].sort_values("score", ascending=False).head(topn)
     top_ids = peaks["locality_id"].tolist()
-    full = _cell_scores(pq, alpha, k, life_list=life_list, locality_ids=top_ids, targets=targets)  # full-year curves
+    full = _cell_scores(pq, alpha, k, life_list=life_list, locality_ids=top_ids, targets=targets,
+                        hours=hours, has_lambda=has_lambda)  # full-year curves
     curves = {}
     for lid, g in full.groupby("locality_id"):
         wk = [0.0] * 48
@@ -349,9 +395,10 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
         ll = f"AND species_code IN {_inlist(targets)}"
     else:
         ll = f"AND species_code NOT IN {_inlist(life_list)}" if life_list else ""
+    lamcol = ", lambda_hr" if has_lambda else ""
     detail = _q(
         f"SELECT locality, locality_id, state, week, species_code, common_name, occupancy, "
-        f"detect_given_present, det_a, det_b, p_lifer_1, w, latitude, longitude FROM '{pq}' "
+        f"detect_given_present, det_a, det_b, p_lifer_1, w, latitude, longitude{lamcol} FROM '{pq}' "
         f"WHERE locality_id IN {_inlist(top_ids)} AND trusted=1 {ll}")
     out = []
     for prow in peaks.itertuples():
@@ -361,17 +408,18 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
         rows = detail[(detail["locality_id"] == lid) & (detail["week"] == best_wk)].copy()
         if rows.empty:
             continue
-        rows["contrib"] = (rows["w"] ** alpha) * rows["occupancy"] * (1 - (1 - rows["detect_given_present"]) ** k)
+        rows["p_eff"] = rows["occupancy"].astype(float) * _pdetect(rows, hours, k, has_lambda)
+        rows["contrib"] = (rows["w"] ** alpha) * rows["p_eff"]
         rows = rows.sort_values("contrib", ascending=False)
         birds = [{
             "species_code": r.species_code, "common_name": r.common_name,
             "p_lifer_per_checklist": round(float(r.p_lifer_1), 3),
-            "p_lifer_trip": round(float(p_lifer_k(r.occupancy, r.detect_given_present, k)), 3),
+            "p_lifer_trip": round(float(r.p_eff), 3),
             "occupancy": round(float(r.occupancy), 3), "rarity_weight": round(float(r.w), 2),
             "contribution": round(float(r.contrib), 3),
         } for r in rows.head(8).itertuples()]
         head = rows.iloc[0]
-        probs = [p_lifer_k(r.occupancy, r.detect_given_present, k) for r in rows.itertuples()]
+        probs = rows["p_eff"].tolist()
         mean = sum(probs); sd = sum(p * (1 - p) for p in probs) ** 0.5
         out.append({
             "locality": head.locality, "locality_id": lid, "state": head.state,
@@ -386,11 +434,16 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
     return out
 
 
-def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ_gate=0.5) -> list[dict]:
+def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ_gate=0.5,
+                 hours=None) -> list[dict]:
     """For each must-see species, the best hotspot/week to find it in the region (all weeks
     considered, so we can tell the user WHEN to go). Independent of the expected-lifers ranking."""
     if not target_codes:
         return []
+    has_lambda = _has_lambda(store)
+    if hours is None:
+        hours = float(k)
+    kci = max(1, int(round(hours))) if has_lambda else int(k)
     pq = _parquet(store)
     out = []
     for code in target_codes:
@@ -398,10 +451,11 @@ def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ
             where = [f"species_code = {_lit(code)}", "trusted=1"]
             if states:
                 where.append(f"state IN {_inlist(states)}")
+            lamcol = ", lambda_hr" if has_lambda else ""
             best_df = _q(
                 f"SELECT locality, locality_id, state, week, occupancy, detect_given_present, det_a, det_b, "
-                f"latitude, longitude, common_name, "
-                f"occupancy*(1-pow(1-detect_given_present,{int(k)})) AS p FROM '{pq}' "
+                f"latitude, longitude, common_name{lamcol}, "
+                f"occupancy*{_pdetect_sql(hours, k, has_lambda)} AS p FROM '{pq}' "
                 f"WHERE {' AND '.join(where)} ORDER BY p DESC LIMIT 1")
             if best_df.empty:
                 out.append({"species_code": code, "found": False}); continue
@@ -411,9 +465,9 @@ def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ
             sub = region[region["species_code"] == code] if not region.empty else region
             if len(sub) == 0:
                 out.append({"species_code": code, "found": False}); continue
-            sub = sub.assign(p=sub["occupancy"] * (1 - (1 - sub["detect_given_present"]) ** k))
+            sub = sub.assign(p=sub["occupancy"].astype(float) * _pdetect(sub, hours, k, has_lambda))
             best = sub.loc[sub["p"].idxmax()]
-        lo, hi = _detect_ci(best.occupancy, best.det_a, best.det_b, k)
+        lo, hi = _detect_ci(best.occupancy, best.det_a, best.det_b, kci)
         out.append({
             "species_code": code, "common_name": best.common_name, "found": True,
             "locality": best.locality, "locality_id": best.locality_id, "state": best.state,
@@ -455,20 +509,22 @@ def _candidate_sites(store, pq, base_lat, base_lon, radius_km, max_sites=80) -> 
 
 
 def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_days,
-                   k_per_day=4, alpha=0.0, life_list=(), targets=None, occ_gate=0.5,
+                   hours_per_day=4.0, alpha=0.0, life_list=(), targets=None, occ_gate=0.5,
                    max_sites=80) -> dict:
-    """Base-camp itinerary: pick + radius + dates -> a greedy day-by-day plan. See itinerary.plan."""
+    """Base-camp itinerary: pick + radius + dates + hours/day -> a greedy day-by-day plan.
+    Uses per-hour rates (lambda_hr) when the store has them, else the k-checklist fallback."""
+    has_lambda = _has_lambda(store)
     pq = _parquet(store)
     sites = _candidate_sites(store, pq, float(base_lat), float(base_lon), float(radius_km), max_sites)
     start = _itin._parse_date(start_date)
     if sites.empty:
-        return _itin._empty(start, n_days, k_per_day, sites)
+        return _itin._empty(start, n_days, hours_per_day, sites)
     locids = sites["locality_id"].tolist()
     wks = _itin.trip_weeks(start, int(n_days))
     targets = list(targets) if targets else None
     life_list = list(life_list)
     cols = ["locality_id", "week", "species_code", "common_name", "occupancy",
-            "detect_given_present", "w"]
+            "detect_given_present", "w"] + (["lambda_hr"] if has_lambda else [])
     if pq:
         where = [f"locality_id IN {_inlist(locids)}",
                  f"week IN ({','.join(str(int(w)) for w in wks)})", "trusted=1"]
@@ -484,8 +540,9 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
                 cells = cells[cells["species_code"].isin(set(targets))]
             elif life_list:
                 cells = cells[~cells["species_code"].isin(set(life_list))]
-            cells = cells[cols].copy()
-    return _itin.plan(cells, sites, start, n_days, k_per_day=k_per_day, alpha=alpha)
+            cells = cells[[c for c in cols if c in cells.columns]].copy()
+    return _itin.plan(cells, sites, start, n_days, hours_per_day=hours_per_day, alpha=alpha,
+                      has_lambda=has_lambda)
 
 
 def regions(store: Store, level="state") -> list[dict]:
@@ -505,26 +562,33 @@ def regions(store: Store, level="state") -> list[dict]:
     return _REGIONS_CACHE[key]
 
 
-def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=()) -> dict:
-    """Expected lifers + likely-bird breakdown for one destination and effort level."""
+def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), hours=None) -> dict:
+    """Expected lifers + likely-bird breakdown for one destination and effort level (hours of
+    birding when the store has lambda_hr, else k checklists)."""
+    has_lambda = _has_lambda(store)
+    if hours is None:
+        hours = float(k)
+    kci = max(1, int(round(hours))) if has_lambda else int(k)   # k used for the CI band
     pq = _parquet(store)
     if pq:
         ll = f"AND species_code NOT IN {_inlist(life_list)}" if life_list else ""
+        lamcol = ", lambda_hr" if has_lambda else ""
         cell = _q(
             f"SELECT locality, locality_id, week, species_code, common_name, occupancy, "
-            f"detect_given_present, det_a, det_b FROM '{pq}' "
+            f"detect_given_present, det_a, det_b{lamcol} FROM '{pq}' "
             f"WHERE locality_id={_lit(locality_id)} AND week={int(week)} AND trusted=1 {ll}")
     else:
         cell = _slice(store, 0.5, locality_id=locality_id, weeks=[week])
         cell = cell[~cell["species_code"].isin(set(life_list))] if not cell.empty else cell
-    cell["p_trip"] = p_lifer_k(cell["occupancy"], cell["detect_given_present"], k)
-    cell = cell[cell["p_trip"] > 0.001].sort_values("p_trip", ascending=False)
+    if not cell.empty:
+        cell["p_trip"] = cell["occupancy"].astype(float) * _pdetect(cell, hours, k, has_lambda)
+    cell = cell[cell["p_trip"] > 0.001].sort_values("p_trip", ascending=False) if not cell.empty else cell
     name = cell["locality"].iloc[0] if len(cell) else locality_id
 
     if cell.empty:
         return {"locality": name, "locality_id": locality_id, "week": week,
-                "month": month_of_week(week), "effort_checklists": k, "expected_lifers": 0.0,
-                "p_at_least_one": 0.0, "likely_range": [0, 0], "birds": []}
+                "month": month_of_week(week), "effort_checklists": k, "effort_hours": round(hours, 1),
+                "expected_lifers": 0.0, "p_at_least_one": 0.0, "likely_range": [0, 0], "birds": []}
 
     probs = cell["p_trip"].values
     dist = poisson_binomial(probs)
@@ -532,12 +596,12 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=()) -
     sd = float((probs * (1 - probs)).sum()) ** 0.5
     birds = []
     for r in cell.itertuples():
-        lo, hi = _detect_ci(r.occupancy, r.det_a, r.det_b, k)
+        lo, hi = _detect_ci(r.occupancy, r.det_a, r.det_b, kci)
         birds.append({"common_name": r.common_name, "species_code": r.species_code,
                       "p_trip": round(float(r.p_trip), 3), "p_low": lo, "p_high": hi})
     return {
         "locality": name, "locality_id": locality_id, "week": int(week), "month": month_of_week(week),
-        "effort_checklists": k,
+        "effort_checklists": k, "effort_hours": round(hours, 1),
         "expected_lifers": round(mean, 2),
         "lifers_low": max(0, round(mean - sd)), "lifers_high": round(mean + sd),
         "p_at_least_one": round(float(1 - dist[0]), 3),
