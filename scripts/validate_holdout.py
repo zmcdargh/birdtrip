@@ -20,6 +20,7 @@ Usage:
       --holdout-years 3 --temp-dir data/duckdb_tmp --memory-limit 24GB --threads 4
 """
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -95,8 +96,8 @@ def isotonic_fit(x, y, w):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ebd", required=True)
-    ap.add_argument("--current-year", type=int, required=True)
+    ap.add_argument("--ebd", default=None, help="EBD .gz/.txt (required unless --from-trials)")
+    ap.add_argument("--current-year", type=int, default=None, help="(required unless --from-trials)")
     ap.add_argument("--holdout-years", type=int, default=3, help="number of most-recent years to test on")
     ap.add_argument("--calib-years", type=int, default=0,
                     help="if >0, reserve this many years (just before the test block) to FIT a Platt "
@@ -116,8 +117,36 @@ def main():
     ap.add_argument("--label", default="data", help="tag for output files, e.g. US or NY")
     ap.add_argument("--out-dir", default="viz", help="where to write the calibration plot + CSV")
     ap.add_argument("--bins", type=int, default=15, help="reliability-curve bins")
+    ap.add_argument("--save-trials", default=None,
+                    help="dir to save the aggregated cal/ev trial tables (so recalibration can be "
+                         "re-run later without re-scanning the EBD).")
+    ap.add_argument("--from-trials", default=None,
+                    help="dir of previously --save-trials output: skip the EBD scan entirely and just "
+                         "redo recalibration + metrics + plot (seconds, not hours).")
     a = ap.parse_args()
 
+    con = duckdb.connect()
+    con.execute(f"PRAGMA memory_limit='{a.memory_limit}'; PRAGMA threads={a.threads};")
+    tmp = a.temp_dir or "/tmp"
+    Path(tmp).mkdir(parents=True, exist_ok=True)
+    con.execute(f"PRAGMA temp_directory='{tmp}';")
+
+    if a.from_trials:                                     # fast path: reuse cached trials, skip the scan
+        d = Path(a.from_trials)
+        meta = json.load(open(d / "meta.json"))
+        a.current_year = meta["current_year"]
+        test_lo, calib_lo, calib_hi, recal = meta["test_lo"], meta["calib_lo"], meta["calib_hi"], meta["recal"]
+        con.execute(f"CREATE TEMP TABLE ev AS SELECT * FROM read_parquet('{d / 'ev.parquet'}');")
+        if recal:
+            con.execute(f"CREATE TEMP TABLE cal AS SELECT * FROM read_parquet('{d / 'cal.parquet'}');")
+        print(f"reusing trials from {d}  |  "
+              + (f"calib {calib_lo}-{calib_hi} | " if recal else "") + f"test {test_lo}-{a.current_year}", flush=True)
+        _report(con, a, test_lo, calib_lo, calib_hi, recal)
+        con.close()
+        return
+
+    if a.ebd is None or a.current_year is None:
+        ap.error("--ebd and --current-year are required unless --from-trials is given")
     recal = a.calib_years > 0
     test_lo = a.current_year - a.holdout_years + 1
     calib_hi = test_lo - 1
@@ -129,12 +158,6 @@ def main():
         print(f"train {train_min}-{train_max} | calib {calib_lo}-{calib_hi} | test {test_lo}-{a.current_year}", flush=True)
     else:
         print(f"train years {train_min}-{train_max}   |   test years {test_lo}-{a.current_year}", flush=True)
-
-    con = duckdb.connect()
-    con.execute(f"PRAGMA memory_limit='{a.memory_limit}'; PRAGMA threads={a.threads};")
-    tmp = a.temp_dir or "/tmp"
-    Path(tmp).mkdir(parents=True, exist_ok=True)
-    con.execute(f"PRAGMA temp_directory='{tmp}';")
 
     con.execute(f"""
     CREATE TEMP TABLE tax AS SELECT "SCI_NAME" AS sci_name,
@@ -231,8 +254,25 @@ def main():
 
     build_trials("ev", test_lo, a.current_year)           # TEST block (final evaluation)
     if recal:
-        build_trials("cal", calib_lo, calib_hi)           # CALIBRATION block (fits the Platt map only)
+        build_trials("cal", calib_lo, calib_hi)           # CALIBRATION block (fits the recal map only)
+    Path(obs_pq).unlink(missing_ok=True)                  # done with the scan intermediate
 
+    if a.save_trials:                                     # cache the small trial tables for fast re-runs
+        sd = Path(a.save_trials); sd.mkdir(parents=True, exist_ok=True)
+        con.execute(f"COPY ev TO '{sd / 'ev.parquet'}' (FORMAT PARQUET);")
+        if recal:
+            con.execute(f"COPY cal TO '{sd / 'cal.parquet'}' (FORMAT PARQUET);")
+        json.dump({"test_lo": test_lo, "calib_lo": calib_lo, "calib_hi": calib_hi,
+                   "current_year": a.current_year, "recal": recal}, open(sd / "meta.json", "w"))
+        print(f"saved trials -> {sd}  (re-run recalibration instantly with --from-trials {sd})")
+
+    _report(con, a, test_lo, calib_lo, calib_hi, recal)
+    con.close()
+
+
+def _report(con, a, test_lo, calib_lo, calib_hi, recal):
+    """Recalibration + metrics + calibration plot, over the cached `ev` (and `cal`) trial tables.
+    Reachable both after a full scan and via --from-trials, so it never re-reads the EBD."""
     # ---- metrics on the TEST block ----
     pl = f"least(1-{EPS}, greatest({EPS}, occ*(1-exp(-lam*th))))"
     pb = f"least(1-{EPS}, greatest({EPS}, occ*dgp))"
@@ -298,8 +338,6 @@ def main():
         return df
     rel_l, rel_b = reliability(pl), reliability(pb)
     rel_r = reliability(recal_expr, recal_src) if recal else None
-    con.close()
-    Path(obs_pq).unlink(missing_ok=True)
 
     outd = Path(a.out_dir); outd.mkdir(parents=True, exist_ok=True)
     parts = [rel_l.assign(model="lambda"), rel_b.assign(model="duration_blind")]
