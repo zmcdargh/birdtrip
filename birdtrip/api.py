@@ -85,6 +85,9 @@ class RecommendReq(BaseModel):
     alpha: float = Field(1.0, ge=0, description="rarity slider: 0=most birds, higher=specialties")
     occ_gate: float = Field(0.5, ge=0, le=1)
     topn: int = Field(5, ge=1, le=50)
+    exclude_restricted: bool = Field(False, description="drop hotspots flagged as restricted-access")
+    user_restricted: list[str] = Field(default_factory=list,
+                                        description="locality IDs the user has marked restricted")
 
 
 class SummaryReq(BaseModel):
@@ -140,7 +143,8 @@ def recommend(req: RecommendReq):
     return service.recommend_trips(
         _store(), life_list=req.life_list, targets=req.targets, states=req.states, state=req.state,
         county=req.county, weeks=req.weeks, k=req.k, hours=req.hours, alpha=req.alpha,
-        occ_gate=req.occ_gate, topn=req.topn)
+        occ_gate=req.occ_gate, topn=req.topn,
+        exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted)
 
 
 @app.post("/summary")

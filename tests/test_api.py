@@ -143,6 +143,15 @@ def test_itinerary_exclude_restricted(client):
     assert victim not in [s["locality_id"] for s in out["stops"]]
 
 
+def test_recommend_exclude_restricted(client):
+    recs = client.post("/recommend", json={"state": "New York", "topn": 5}).json()
+    assert recs and all("restricted" in r for r in recs)          # flag exposed on Find-spots results
+    victim = recs[0]["locality_id"]
+    out = client.post("/recommend", json={"state": "New York", "topn": 5,
+                                          "user_restricted": [victim], "exclude_restricted": True}).json()
+    assert victim not in [r["locality_id"] for r in out]
+
+
 def test_restricted_access_heuristic():
     from birdtrip.itinerary import _restricted
     assert _restricted("MacDill AFB")

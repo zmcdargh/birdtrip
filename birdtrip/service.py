@@ -287,18 +287,23 @@ def _regionwise_weights(state_best, occ_gate: float) -> dict:
 
 
 def recommend_trips(store: Store, life_list=(), states=None, state=None, county=None, weeks=None,
-                    k=1, alpha=1.0, occ_gate=0.5, topn=5, targets=None, hours=None) -> list[dict]:
+                    k=1, alpha=1.0, occ_gate=0.5, topn=5, targets=None, hours=None,
+                    exclude_restricted=False, user_restricted=None) -> list[dict]:
     """Rank (locality, week) destinations by rarity-weighted expected lifers. Effort is `hours` of
     birding when the store has per-hour rates (lambda_hr), else `k` checklists. `states` is a list
-    (multi-select); empty/None means everywhere. `targets` (species codes) restricts the search."""
+    (multi-select); empty/None means everywhere. `targets` (species codes) restricts the search.
+    Each result carries a `restricted` flag (name heuristic OR user_restricted); exclude_restricted
+    drops those from the ranking."""
     targets = list(targets) if targets else None
     has_lambda = _has_lambda(store)
+    ur = set(user_restricted or [])
     if hours is None:
         hours = float(k)
     pq = _parquet(store)
     if pq:   # scalable path: score in DuckDB over Parquet, fetch details for top hotspots only
         return _recommend_via_parquet(store, pq, list(life_list), states or ([state] if state else None),
-                                      weeks, k, alpha, occ_gate, topn, targets, hours, has_lambda)
+                                      weeks, k, alpha, occ_gate, topn, targets, hours, has_lambda,
+                                      exclude_restricted, ur)
 
     region = _slice(store, occ_gate, states=states, state=state, county=county, weeks=weeks)
     if region.empty:
@@ -317,10 +322,12 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
     # hotspot's best week as the representative and report the span of its strong weeks.
     cell_scores = cand.groupby(["locality_id", "week"], as_index=False)["contrib"].sum()
     peak_idx = cell_scores.groupby("locality_id")["contrib"].idxmax()
-    peaks = cell_scores.loc[peak_idx].sort_values("contrib", ascending=False).head(topn)
+    peaks = cell_scores.loc[peak_idx].sort_values("contrib", ascending=False).head(topn + 40)
 
     out = []
     for prow in peaks.itertuples():
+        if len(out) >= topn:
+            break
         locid, best_wk, peak = prow.locality_id, int(prow.week), float(prow.contrib)
         strong = cell_scores[(cell_scores["locality_id"] == locid)
                              & (cell_scores["contrib"] >= 0.8 * peak)]["week"]
@@ -336,6 +343,9 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
             "contribution": round(float(r.contrib), 3),
         } for r in rows.head(8).itertuples()]
         head = rows.iloc[0]
+        restricted = _itin._restricted(head.locality) or (locid in ur)
+        if exclude_restricted and restricted:
+            continue
         probs = [p_lifer_k(r.occupancy, r.detect_given_present, k) for r in rows.itertuples()]
         mean = sum(probs)
         sd = sum(p * (1 - p) for p in probs) ** 0.5
@@ -345,7 +355,7 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
             "recommended_weeks": [lo, hi], "recommended_label": week_range_label(lo, hi),
             "latitude": (None if pd.isna(head.latitude) else round(float(head.latitude), 5)),
             "longitude": (None if pd.isna(head.longitude) else round(float(head.longitude), 5)),
-            "score": round(peak, 3),
+            "score": round(peak, 3), "restricted": bool(restricted),
             "lifers_low": max(0, round(mean - sd)), "lifers_high": round(mean + sd),
             "expected_lifers_trip": round(mean, 2),
             "top_birds": birds,
@@ -373,14 +383,16 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
 
 
 def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_gate, topn, targets=None,
-                           hours=None, has_lambda=False):
+                           hours=None, has_lambda=False, exclude_restricted=False, user_restricted=None):
     if hours is None:
         hours = float(k)
+    ur = set(user_restricted or [])
     cs = _cell_scores(pq, alpha, k, states=states, weeks=weeks, life_list=life_list, targets=targets,
                       hours=hours, has_lambda=has_lambda)
     if cs.empty:
         return []
-    peaks = cs.loc[cs.groupby("locality_id")["score"].idxmax()].sort_values("score", ascending=False).head(topn)
+    # take a buffer beyond topn so excluding restricted hotspots still leaves a full list
+    peaks = cs.loc[cs.groupby("locality_id")["score"].idxmax()].sort_values("score", ascending=False).head(topn + 40)
     top_ids = peaks["locality_id"].tolist()
     full = _cell_scores(pq, alpha, k, life_list=life_list, locality_ids=top_ids, targets=targets,
                         hours=hours, has_lambda=has_lambda)  # full-year curves
@@ -402,11 +414,16 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
         f"WHERE locality_id IN {_inlist(top_ids)} AND trusted=1 {ll}")
     out = []
     for prow in peaks.itertuples():
+        if len(out) >= topn:
+            break
         lid, best_wk, peak = prow.locality_id, int(prow.week), float(prow.score)
         strong = cs[(cs["locality_id"] == lid) & (cs["score"] >= 0.8 * peak)]["week"]
         lo, hi = int(strong.min()), int(strong.max())
         rows = detail[(detail["locality_id"] == lid) & (detail["week"] == best_wk)].copy()
         if rows.empty:
+            continue
+        restricted = _itin._restricted(rows.iloc[0].locality) or (lid in ur)
+        if exclude_restricted and restricted:
             continue
         rows["p_eff"] = rows["occupancy"].astype(float) * _pdetect(rows, hours, k, has_lambda)
         rows["contrib"] = (rows["w"] ** alpha) * rows["p_eff"]
@@ -427,7 +444,7 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
             "recommended_weeks": [lo, hi], "recommended_label": week_range_label(lo, hi),
             "latitude": (None if pd.isna(head.latitude) else round(float(head.latitude), 5)),
             "longitude": (None if pd.isna(head.longitude) else round(float(head.longitude), 5)),
-            "score": round(peak, 3),
+            "score": round(peak, 3), "restricted": bool(restricted),
             "lifers_low": max(0, round(mean - sd)), "lifers_high": round(mean + sd),
             "expected_lifers_trip": round(mean, 2), "top_birds": birds, "weekly": curves.get(lid, [0.0] * 48),
         })
