@@ -48,19 +48,28 @@ def fit_platt(p, d, n):
     so near-separable calibration data can't send b to infinity (the 'collapse to 2 points' failure)."""
     p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
     x = np.log(p / (1 - p)); n = np.asarray(n, float); d = np.asarray(d, float)
-    X = np.column_stack([np.ones_like(x), x]); beta = np.array([0.0, 1.0])
+    # standardize the feature (weighted) so the IRLS system is well-conditioned — this is what
+    # actually prevents the solve from exploding to ~1e14 on ill-scaled real data.
+    m = np.average(x, weights=n); s = np.sqrt(np.average((x - m) ** 2, weights=n))
+    if not np.isfinite(s) or s < 1e-9:
+        return 0.0, 1.0
+    xz = (x - m) / s
+    X = np.column_stack([np.ones_like(xz), xz]); beta = np.array([0.0, 1.0])
     for _ in range(100):
         mu = 1 / (1 + np.exp(-np.clip(X @ beta, -30, 30)))
         W = np.clip(n * mu * (1 - mu), 1e-9, None)
-        z = X @ beta + (d - n * mu) / W
-        new = np.linalg.solve(X.T @ (X * W[:, None]) + 1e-6 * np.eye(2), X.T @ (W * z))
+        z = np.clip(X @ beta, -30, 30) + (d - n * mu) / W
+        new = np.linalg.solve(X.T @ (X * W[:, None]) + 1e-3 * np.eye(2), X.T @ (W * z))
         if not np.all(np.isfinite(new)):
             break
-        done = np.max(np.abs(new - beta)) < 1e-9
+        done = np.max(np.abs(new - beta)) < 1e-8
         beta = new
         if done:
             break
-    return float(beta[0]), float(np.clip(beta[1], 0.02, 8.0))
+    a, b = beta[0] - beta[1] * m / s, beta[1] / s        # back to raw-logit scale
+    if not (np.isfinite(a) and np.isfinite(b)):
+        return 0.0, 1.0
+    return float(np.clip(a, -20, 20)), float(np.clip(b, 0.0, 10.0))
 
 
 def isotonic_fit(x, y, w):
