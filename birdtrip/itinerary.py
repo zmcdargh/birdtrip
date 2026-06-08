@@ -31,6 +31,7 @@ report each day's biggest gain_s as "what this stop adds." Greedy on a submodula
 objective, so it carries the standard 1-1/e guarantee on expected coverage.
 """
 from __future__ import annotations
+import re
 from datetime import date, datetime, timedelta
 
 import numpy as np
@@ -39,6 +40,19 @@ import pandas as pd
 from .recommend import month_of_week
 
 _SUB = ["early", "mid", "late", "late"]
+
+# Heuristic flag for hotspots whose NAME suggests restricted / limited access. eBird carries no
+# machine-readable access field, so this is a name guess, not authoritative — the UI labels it
+# "verify access". Catches the common cases (military bases, permit/private/members-only, tours).
+_RESTRICTED_RE = re.compile(
+    r"restricted access|permit\s*required|by\s*permit|members?\s*only|by\s*appointment|"
+    r"no\s*public\s*access|\bprivate\b|tour\s*only|guided.{0,15}only|reservation\s*required|"
+    r"\bAFB\b|air\s*force\s*base|naval\s*air|\bNAS\b|\bmilitary\b|do\s*not\s*enter|closed\s*to\s*the\s*public",
+    re.IGNORECASE)
+
+
+def _restricted(name) -> bool:
+    return bool(name and _RESTRICTED_RE.search(str(name)))
 
 
 def date_to_week(d: date) -> int:
@@ -186,24 +200,25 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
         m = site_meta[best_loc]
         order = np.argsort(best_gain)[::-1]
         birds = []
-        for j in order[:max_per_species_report]:
-            if best_gain[j] <= 1e-4:
+        for j in order:                          # ALL species with a non-negligible chance, ranked
+            if best_gain[j] < 5e-4:              # below this rounds to 0.000 — i.e. effectively zero
                 break
             code = universe[j]
             birds.append({"species_code": code, "common_name": names.get(code, code),
                           "p_new_here": round(float(best_gain[j]), 3),
                           "rarity_weight": round(float(wvec[j]), 2)})
+        restricted = _restricted(m.locality)
         days_out.append({
             "day": di, "date": the_date.isoformat(), "week": wk, "week_label": week_label(wk),
             "locality": m.locality, "locality_id": best_loc, "state": getattr(m, "state", None),
             "latitude": _f(m.latitude), "longitude": _f(m.longitude),
-            "dist_km": round(float(m.dist_km), 1),
+            "dist_km": round(float(m.dist_km), 1), "restricted": restricted,
             "expected_new": round(day_gain, 2), "cumulative_expected": round(cum, 2),
             "revisit": best_loc in stops, "birds": birds,
         })
         stops.setdefault(best_loc, {
             "locality": m.locality, "locality_id": best_loc, "state": getattr(m, "state", None),
-            "latitude": _f(m.latitude), "longitude": _f(m.longitude),
+            "latitude": _f(m.latitude), "longitude": _f(m.longitude), "restricted": restricted,
             "dist_km": round(float(m.dist_km), 1), "days": []})
         stops[best_loc]["days"].append(di)
 

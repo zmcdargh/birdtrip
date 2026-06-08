@@ -498,7 +498,7 @@ function renderItinerary(plan){
     + plan.days.map((d,i)=> d.locality ? `
       <div class="day" data-i="${i}">
         <div class="num">${d.day}</div>
-        <div><h3>${d.locality}</h3>
+        <div><h3>${d.locality}${d.restricted?' <span style="color:#c0392b;font-size:11px;font-weight:600" title="Name suggests restricted or limited access — verify before visiting">⚠ access</span>':''}</h3>
           <div class="meta">${d.week_label} · ${d.dist_km} km from base${d.revisit?' · revisit':''}</div>
           <div class="meta"><b>+${d.expected_new}</b> new lifers (running total ${d.cumulative_expected})</div>
         </div></div>` : `
@@ -515,7 +515,7 @@ function renderItinerary(plan){
       {color:'#c0392b',weight:1.5,opacity:0.5,dashArray:'4 4'}).addTo(itinLayer);
     L.marker([s.latitude,s.longitude],{icon:L.divIcon({className:'',
       html:`<div class="pin" style="background:#c0392b">${s.days.join(',')}</div>`,iconSize:[24,24],iconAnchor:[12,12]})})
-      .addTo(itinLayer).bindTooltip(`${s.locality} — day ${s.days.join(', ')}`,{direction:'top'});
+      .addTo(itinLayer).bindTooltip(`${s.locality} — day ${s.days.join(', ')}${s.restricted?' ⚠ verify access':''}`,{direction:'top'});
     pts.push([s.latitude,s.longitude]);
   });
   if(pts.length>1) map.fitBounds(pts,{padding:[60,60],maxZoom:11});
@@ -535,6 +535,7 @@ function showDay(i){
   $('detail').innerHTML=`<h2 style="margin:0 0 2px;font-size:15px">Day ${d.day}: ${d.locality}</h2>
     <div class="meta" style="color:var(--mute);font-size:12.5px">${d.date} · ${d.week_label} · ${d.dist_km} km from base
       · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">eBird ↗</a></div>
+    ${d.restricted?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ This hotspot's name suggests restricted or limited access (permit, private, military, tour-only…). It's a name guess, not authoritative — verify access before planning to visit.</div>`:''}
     <div style="margin:8px 0 4px;font-size:14px"><b>+${d.expected_new}</b> expected new lifers this day</div>
     <div class="hint" style="margin-bottom:8px">Most likely new birds here, discounting what you've probably already seen earlier in the trip:</div>
     ${rows}`;

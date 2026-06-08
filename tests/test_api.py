@@ -134,6 +134,17 @@ def test_itinerary_life_list_reduces_total(client):
     assert fewer["expected_lifers_total"] <= full["expected_lifers_total"]
 
 
+def test_restricted_access_heuristic():
+    from birdtrip.itinerary import _restricted
+    assert _restricted("MacDill AFB")
+    assert _restricted("Fort Morgan--restricted access")
+    assert _restricted("Smith Preserve (by appointment)")
+    assert _restricted("Naval Air Station Pensacola")
+    assert not _restricted("Dauphin Island")
+    assert not _restricted("Central Park")
+    assert not _restricted(None)
+
+
 def test_itinerary_out_of_range_base(client):
     # a base in the middle of the Pacific reaches nothing -> graceful empty plan
     body = {"base_lat": 0.0, "base_lon": -150.0, "radius_km": 50,

@@ -479,9 +479,10 @@ def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ
     return out
 
 
-def _candidate_sites(store, pq, base_lat, base_lon, radius_km, max_sites=80) -> pd.DataFrame:
-    """Hotspots reachable from the base pin: bbox prefilter (cheap at US scale) then exact
-    haversine, nearest-first, capped at max_sites."""
+def _candidate_sites(store, pq, base_lat, base_lon, radius_km) -> pd.DataFrame:
+    """ALL hotspots within the radius of the base pin (bbox prefilter then exact haversine).
+    Distance is ONLY the reachability cutoff here — there is no nearest-first preference; any
+    capping to a manageable count is done later by expected richness, not proximity."""
     import math
     dlat = radius_km / 111.0
     dlon = radius_km / max(1e-6, 111.0 * math.cos(math.radians(base_lat)))
@@ -505,29 +506,47 @@ def _candidate_sites(store, pq, base_lat, base_lon, radius_km, max_sites=80) -> 
         return df
     df["dist_km"] = _itin.haversine_km(base_lat, base_lon,
                                        df["latitude"].to_numpy(float), df["longitude"].to_numpy(float))
-    return df[df["dist_km"] <= radius_km].sort_values("dist_km").head(max_sites).reset_index(drop=True)
+    return df[df["dist_km"] <= radius_km].sort_values("dist_km").reset_index(drop=True)
 
 
 def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_days,
                    hours_per_day=4.0, alpha=0.0, life_list=(), targets=None, occ_gate=0.5,
                    max_sites=80) -> dict:
     """Base-camp itinerary: pick + radius + dates + hours/day -> a greedy day-by-day plan.
-    Uses per-hour rates (lambda_hr) when the store has them, else the k-checklist fallback."""
+    Uses per-hour rates (lambda_hr) when the store has them, else the k-checklist fallback.
+    `max_sites` caps how many hotspots the greedy considers — by EXPECTED RICHNESS within the
+    radius, never by proximity. Distance is only the reachability cutoff (the radius)."""
     has_lambda = _has_lambda(store)
     pq = _parquet(store)
-    sites = _candidate_sites(store, pq, float(base_lat), float(base_lon), float(radius_km), max_sites)
+    sites = _candidate_sites(store, pq, float(base_lat), float(base_lon), float(radius_km))
     start = _itin._parse_date(start_date)
     if sites.empty:
         return _itin._empty(start, n_days, hours_per_day, sites)
-    locids = sites["locality_id"].tolist()
     wks = _itin.trip_weeks(start, int(n_days))
+    wkin = ",".join(str(int(w)) for w in wks)
     targets = list(targets) if targets else None
     life_list = list(life_list)
+
+    # If more hotspots are in range than we'll consider, keep the RICHEST (most expected lifers on
+    # the best trip day), NOT the nearest — proximity must never decide which spots make the cut.
+    if pq and len(sites) > max_sites:
+        sp = (f"AND species_code IN {_inlist(targets)}" if targets
+              else f"AND species_code NOT IN {_inlist(life_list)}" if life_list else "")
+        pdet = _pdetect_sql(hours_per_day, max(1, int(round(hours_per_day))), has_lambda)
+        rich = _q(f"""SELECT locality_id, MAX(s) rich FROM (
+            SELECT locality_id, week, SUM(occupancy*{pdet}) s FROM '{pq}'
+            WHERE locality_id IN {_inlist(sites['locality_id'].tolist())} AND week IN ({wkin})
+              AND trusted=1 {sp} GROUP BY locality_id, week) GROUP BY locality_id
+            ORDER BY rich DESC LIMIT {int(max_sites)}""")
+        sites = sites[sites["locality_id"].isin(set(rich["locality_id"]))].reset_index(drop=True)
+    elif not pq and len(sites) > max_sites:
+        sites = sites.head(max_sites).reset_index(drop=True)        # synthetic store is tiny; harmless
+
+    locids = sites["locality_id"].tolist()
     cols = ["locality_id", "week", "species_code", "common_name", "occupancy",
             "detect_given_present", "w"] + (["lambda_hr"] if has_lambda else [])
     if pq:
-        where = [f"locality_id IN {_inlist(locids)}",
-                 f"week IN ({','.join(str(int(w)) for w in wks)})", "trusted=1"]
+        where = [f"locality_id IN {_inlist(locids)}", f"week IN ({wkin})", "trusted=1"]
         if targets:
             where.append(f"species_code IN {_inlist(targets)}")
         elif life_list:
