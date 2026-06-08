@@ -160,6 +160,9 @@ class ItineraryReq(BaseModel):
     life_list: list[str] = Field(default_factory=list, description="species codes already seen")
     targets: list[str] | None = Field(default=None, description="restrict to these species codes")
     max_sites: int = Field(80, ge=1, le=300, description="cap on candidate hotspots considered")
+    exclude_restricted: bool = Field(False, description="drop hotspots flagged as restricted-access")
+    user_restricted: list[str] = Field(default_factory=list,
+                                        description="locality IDs the user has marked restricted")
 
 
 @app.post("/itinerary")
@@ -167,6 +170,7 @@ def itinerary(req: ItineraryReq):
     return service.plan_itinerary(
         _store(), base_lat=req.base_lat, base_lon=req.base_lon, radius_km=req.radius_km,
         start_date=req.start_date, n_days=req.n_days, hours_per_day=req.hours_per_day, alpha=req.alpha,
+        exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted,
         life_list=req.life_list, targets=req.targets, max_sites=req.max_sites)
 
 

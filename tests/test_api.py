@@ -134,6 +134,15 @@ def test_itinerary_life_list_reduces_total(client):
     assert fewer["expected_lifers_total"] <= full["expected_lifers_total"]
 
 
+def test_itinerary_exclude_restricted(client):
+    base = {**CP, "radius_km": 200, "start_date": "2026-05-01", "n_days": 3}
+    plan = client.post("/itinerary", json=base).json()
+    victim = plan["stops"][0]["locality_id"]
+    out = client.post("/itinerary",
+                      json={**base, "user_restricted": [victim], "exclude_restricted": True}).json()
+    assert victim not in [s["locality_id"] for s in out["stops"]]
+
+
 def test_restricted_access_heuristic():
     from birdtrip.itinerary import _restricted
     assert _restricted("MacDill AFB")

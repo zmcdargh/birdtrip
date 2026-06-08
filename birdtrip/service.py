@@ -511,17 +511,25 @@ def _candidate_sites(store, pq, base_lat, base_lon, radius_km) -> pd.DataFrame:
 
 def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_days,
                    hours_per_day=4.0, alpha=0.0, life_list=(), targets=None, occ_gate=0.5,
-                   max_sites=80) -> dict:
+                   max_sites=80, exclude_restricted=False, user_restricted=None) -> dict:
     """Base-camp itinerary: pick + radius + dates + hours/day -> a greedy day-by-day plan.
     Uses per-hour rates (lambda_hr) when the store has them, else the k-checklist fallback.
     `max_sites` caps how many hotspots the greedy considers — by EXPECTED RICHNESS within the
-    radius, never by proximity. Distance is only the reachability cutoff (the radius)."""
+    radius, never by proximity. Distance is only the reachability cutoff (the radius).
+    A site is 'restricted' if its name trips the heuristic OR its locality_id is in
+    `user_restricted`; with `exclude_restricted` those sites are dropped from the candidates."""
     has_lambda = _has_lambda(store)
     pq = _parquet(store)
+    ur = set(user_restricted or [])
     sites = _candidate_sites(store, pq, float(base_lat), float(base_lon), float(radius_km))
     start = _itin._parse_date(start_date)
     if sites.empty:
         return _itin._empty(start, n_days, hours_per_day, sites)
+    if exclude_restricted:
+        keep = ~(sites["locality"].map(_itin._restricted) | sites["locality_id"].isin(ur))
+        sites = sites[keep].reset_index(drop=True)
+        if sites.empty:
+            return _itin._empty(start, n_days, hours_per_day, sites)
     wks = _itin.trip_weeks(start, int(n_days))
     wkin = ",".join(str(int(w)) for w in wks)
     targets = list(targets) if targets else None
@@ -561,7 +569,7 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
                 cells = cells[~cells["species_code"].isin(set(life_list))]
             cells = cells[[c for c in cols if c in cells.columns]].copy()
     return _itin.plan(cells, sites, start, n_days, hours_per_day=hours_per_day, alpha=alpha,
-                      has_lambda=has_lambda)
+                      has_lambda=has_lambda, user_restricted=ur)
 
 
 def regions(store: Store, level="state") -> list[dict]:

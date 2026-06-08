@@ -90,7 +90,7 @@ def _parse_date(d) -> date:
 
 def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
          hours_per_day: float = 4.0, alpha: float = 0.0, has_lambda: bool = False,
-         max_per_species_report: int = 8) -> dict:
+         user_restricted=None, max_per_species_report: int = 8) -> dict:
     """Greedy itinerary over a prepared candidate set.
 
     cells : per-(locality_id, week, species) rows with columns
@@ -103,6 +103,7 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
     is available, else the k-checklist fallback with k≈round(hours). Returns a JSON dict.
     """
     kfb = max(1, int(round(hours_per_day)))
+    ur = set(user_restricted or [])
     start = _parse_date(start_date)
     n_days = int(n_days)
     days_dates = [start + timedelta(days=i) for i in range(n_days)]
@@ -207,7 +208,7 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
             birds.append({"species_code": code, "common_name": names.get(code, code),
                           "p_new_here": round(float(best_gain[j]), 3),
                           "rarity_weight": round(float(wvec[j]), 2)})
-        restricted = _restricted(m.locality)
+        restricted = _restricted(m.locality) or (best_loc in ur)
         days_out.append({
             "day": di, "date": the_date.isoformat(), "week": wk, "week_label": week_label(wk),
             "locality": m.locality, "locality_id": best_loc, "state": getattr(m, "state", None),

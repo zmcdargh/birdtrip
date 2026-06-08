@@ -150,8 +150,16 @@
         <input type="range" id="kday" min="1" max="12" step="1" value="4"/>
         <div class="hint">More hours → higher chance to detect each bird (with diminishing returns).</div>
       </div>
+      <label style="font-weight:400;font-size:12.5px;margin:0 0 8px;display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="exclrestrict"/> Exclude restricted-access spots</label>
       <button id="plan" type="button">Plan trip</button>
       <div id="itinstatus">Pick a base on the map to start.</div>
+      <div class="ctl" id="birdfindwrap" style="display:none;margin-top:12px">
+        <label>Find a bird in this trip <span class="hint">(which day?)</span></label>
+        <input type="text" id="birdfind" autocomplete="off" placeholder="e.g. Red-cockaded Woodpecker"
+          style="width:100%;font-size:12px;padding:5px;border:1px solid var(--line);border-radius:4px"/>
+        <div id="birdfindres" class="hint" style="margin-top:5px"></div>
+      </div>
     </div>
 
     <div id="results"></div>
@@ -422,6 +430,16 @@ async function showDetail(d){
 const itinLayer = L.layerGroup().addTo(map);
 let baseMarker=null, baseCircle=null, lastPlan=null, planSeq=0;
 
+// user-maintained restricted-access list (persists in this browser), augments the name heuristic
+const userRestricted = new Set(JSON.parse(localStorage.getItem('birdtrip_restricted')||'[]'));
+const saveRestricted = ()=> localStorage.setItem('birdtrip_restricted', JSON.stringify([...userRestricted]));
+const isRestricted = x => !!(x.restricted || userRestricted.has(x.locality_id));
+function toggleRestricted(locid){
+  userRestricted.has(locid) ? userRestricted.delete(locid) : userRestricted.add(locid);
+  saveRestricted();
+  if(lastPlan) renderItinerary(lastPlan, false);   // refresh flags/markers — no re-fit, no re-plan
+}
+
 // default trip start = next Saturday
 (function(){ const d=new Date(); d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7 || 7));
   $('startdate').value = d.toISOString().slice(0,10); })();
@@ -479,7 +497,8 @@ $('plan').onclick=async ()=>{
   const targets=state.targets.map(t=>t.code);
   const body={ base_lat:b.lat, base_lon:b.lng, radius_km:+$('radius').value,
     start_date:$('startdate').value, n_days:+$('ndays').value, hours_per_day:+$('kday').value,
-    alpha:state.alpha, life_list:state.lifeList, targets:(targets.length?targets:null) };
+    alpha:state.alpha, life_list:state.lifeList, targets:(targets.length?targets:null),
+    exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
   try{
     const plan=await getJSON('/itinerary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(my!==planSeq) return; renderItinerary(plan);
@@ -487,18 +506,19 @@ $('plan').onclick=async ()=>{
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 };
 
-function renderItinerary(plan){
+function renderItinerary(plan, fit=true){
   lastPlan=plan; itinLayer.clearLayers();
   if(!plan.days.length){ $('results').innerHTML='<div class="hint">'+(plan.message||'No reachable hotspots.')+'</div>';
-    $('itinstatus').textContent=plan.message||'Nothing in range.'; return; }
+    $('itinstatus').textContent=plan.message||'Nothing in range.'; $('birdfindwrap').style.display='none'; return; }
   $('itinstatus').textContent=`${plan.expected_lifers_total} expected lifers over ${plan.n_days} day${plan.n_days>1?'s':''}.`;
+  $('birdfindwrap').style.display='';
   $('results').innerHTML =
     `<div style="margin:2px 0 9px;font-size:13.5px"><b>${plan.expected_lifers_total}</b> expected lifers ·
        ${plan.stops.length} stop${plan.stops.length>1?'s':''} · ${plan.hours_per_day??''} h/day · ${plan.n_candidate_sites} hotspot${plan.n_candidate_sites>1?'s':''} in range</div>`
     + plan.days.map((d,i)=> d.locality ? `
       <div class="day" data-i="${i}">
         <div class="num">${d.day}</div>
-        <div><h3>${d.locality}${d.restricted?' <span style="color:#c0392b;font-size:11px;font-weight:600" title="Name suggests restricted or limited access — verify before visiting">⚠ access</span>':''}</h3>
+        <div><h3>${d.locality}${isRestricted(d)?' <span style="color:#c0392b;font-size:11px;font-weight:600" title="Flagged restricted/limited access — verify before visiting">⚠ access</span>':''}</h3>
           <div class="meta">${d.week_label} · ${d.dist_km} km from base${d.revisit?' · revisit':''}</div>
           <div class="meta"><b>+${d.expected_new}</b> new lifers (running total ${d.cumulative_expected})</div>
         </div></div>` : `
@@ -515,12 +535,28 @@ function renderItinerary(plan){
       {color:'#c0392b',weight:1.5,opacity:0.5,dashArray:'4 4'}).addTo(itinLayer);
     L.marker([s.latitude,s.longitude],{icon:L.divIcon({className:'',
       html:`<div class="pin" style="background:#c0392b">${s.days.join(',')}</div>`,iconSize:[24,24],iconAnchor:[12,12]})})
-      .addTo(itinLayer).bindTooltip(`${s.locality} — day ${s.days.join(', ')}${s.restricted?' ⚠ verify access':''}`,{direction:'top'});
+      .addTo(itinLayer).bindTooltip(`${s.locality} — day ${s.days.join(', ')}${isRestricted(s)?' ⚠ verify access':''}`,{direction:'top'});
     pts.push([s.latitude,s.longitude]);
   });
-  if(pts.length>1) map.fitBounds(pts,{padding:[60,60],maxZoom:11});
+  if(fit && pts.length>1) map.fitBounds(pts,{padding:[60,60],maxZoom:11});
   showDay(plan.days.findIndex(d=>d.locality));   // open the first birding day
+  runBirdFind();                                 // refresh the bird-search results against this plan
 }
+
+function runBirdFind(){
+  const q=$('birdfind').value.trim().toLowerCase(), out=$('birdfindres');
+  if(!q || !lastPlan){ out.innerHTML=''; return; }
+  const hits=[];
+  lastPlan.days.forEach((d,i)=>{ if(!d.locality) return;
+    d.birds.forEach(b=>{ if(b.common_name.toLowerCase().includes(q))
+      hits.push({i, day:d.day, locality:d.locality, name:b.common_name, p:b.p_new_here}); }); });
+  if(!hits.length){ out.innerHTML="Not in this trip's daily lists."; return; }
+  hits.sort((a,b)=>b.p-a.p);
+  out.innerHTML = hits.map(h=>`<div class="findhit" data-i="${h.i}" style="cursor:pointer;margin:2px 0">
+    <b>Day ${h.day}</b> · ${Math.round(h.p*100)}% — ${h.locality} <span style="color:var(--mute)">(${h.name})</span></div>`).join('');
+  out.querySelectorAll('.findhit').forEach(el=> el.onclick=()=>showDay(+el.dataset.i));
+}
+$('birdfind').oninput = runBirdFind;
 
 function showDay(i){
   if(i<0 || !lastPlan) return;
@@ -535,7 +571,8 @@ function showDay(i){
   $('detail').innerHTML=`<h2 style="margin:0 0 2px;font-size:15px">Day ${d.day}: ${d.locality}</h2>
     <div class="meta" style="color:var(--mute);font-size:12.5px">${d.date} · ${d.week_label} · ${d.dist_km} km from base
       · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">eBird ↗</a></div>
-    ${d.restricted?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ This hotspot's name suggests restricted or limited access (permit, private, military, tour-only…). It's a name guess, not authoritative — verify access before planning to visit.</div>`:''}
+    ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ ${d.restricted?"Name suggests restricted/limited access (permit, private, military, tour-only…) — a heuristic guess, verify before visiting.":"You've marked this hotspot restricted."}</div>`:''}
+    <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — click to unmark':'🚫 mark this hotspot restricted'}</a></div>
     <div style="margin:8px 0 4px;font-size:14px"><b>+${d.expected_new}</b> expected new lifers this day</div>
     <div class="hint" style="margin-bottom:8px">Most likely new birds here, discounting what you've probably already seen earlier in the trip:</div>
     ${rows}`;
