@@ -65,6 +65,9 @@ def main():
                     help="if >0, reserve this many years (just before the test block) to FIT a Platt "
                          "recalibration; the model trains on the years before that, and calibration is "
                          "reported on the test block only — a true 3-way temporal split.")
+    ap.add_argument("--starting-year", type=int, default=None,
+                    help="earliest year to include in training (default: current_year - 10). Set lower "
+                         "to train on more history, e.g. --starting-year 2008.")
     ap.add_argument("--taxonomy", default=str(pc.DEFAULT_TAX))
     ap.add_argument("--min-checklists", type=int, default=pc.MIN_CHECKLISTS)
     ap.add_argument("--memory-limit", default="4GB")
@@ -80,7 +83,7 @@ def main():
     calib_hi = test_lo - 1
     calib_lo = calib_hi - a.calib_years + 1               # calib block (only used when recal)
     train_max = (calib_lo - 1) if recal else (test_lo - 1)
-    train_min = a.current_year - pc.LOOKBACK_YEARS
+    train_min = a.starting_year if a.starting_year is not None else a.current_year - pc.LOOKBACK_YEARS
     MINY, MINC, C, PS = pc.MIN_CHECKLISTS_YEAR, a.min_checklists, pc.DGP_PRIOR, pc.PRIOR_STRENGTH
     if recal:
         print(f"train {train_min}-{train_max} | calib {calib_lo}-{calib_hi} | test {test_lo}-{a.current_year}", flush=True)
