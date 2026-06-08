@@ -44,16 +44,44 @@ def bucket_case(col="dur"):
 
 def fit_platt(p, d, n):
     """Platt scaling: fit calibrated = sigmoid(a + b*logit(p)) by weighted logistic regression
-    (IRLS) on binned calibration data — p=bin predicted prob, d=detections, n=trials."""
+    (IRLS) on binned calibration data. Hardened: clamped logits, convergence break, bounded slope —
+    so near-separable calibration data can't send b to infinity (the 'collapse to 2 points' failure)."""
     p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
     x = np.log(p / (1 - p)); n = np.asarray(n, float); d = np.asarray(d, float)
     X = np.column_stack([np.ones_like(x), x]); beta = np.array([0.0, 1.0])
-    for _ in range(60):
-        mu = 1 / (1 + np.exp(-(X @ beta)))
+    for _ in range(100):
+        mu = 1 / (1 + np.exp(-np.clip(X @ beta, -30, 30)))
         W = np.clip(n * mu * (1 - mu), 1e-9, None)
         z = X @ beta + (d - n * mu) / W
-        beta = np.linalg.solve(X.T @ (X * W[:, None]) + 1e-9 * np.eye(2), X.T @ (W * z))
-    return float(beta[0]), float(beta[1])
+        new = np.linalg.solve(X.T @ (X * W[:, None]) + 1e-6 * np.eye(2), X.T @ (W * z))
+        if not np.all(np.isfinite(new)):
+            break
+        done = np.max(np.abs(new - beta)) < 1e-9
+        beta = new
+        if done:
+            break
+    return float(beta[0]), float(np.clip(beta[1], 0.02, 8.0))
+
+
+def isotonic_fit(x, y, w):
+    """Weighted isotonic regression (pool-adjacent-violators). Returns (xs, yhat): xs sorted, yhat
+    the non-decreasing fitted values — pass to np.interp to map any predicted prob to a calibrated
+    one. Nonparametric and bounded in [min(y), max(y)], so it can't diverge like a logistic fit."""
+    o = np.argsort(x, kind="mergesort")
+    xs = np.asarray(x, float)[o]; ys = np.asarray(y, float)[o]; ws = np.asarray(w, float)[o]
+    val, wt, cnt = [], [], []
+    for yi, wi in zip(ys, ws):
+        v, ww, c = float(yi), float(wi), 1
+        while val and val[-1] > v:                 # pool adjacent downward violators -> non-decreasing
+            tw = wt[-1] + ww
+            v = (val[-1] * wt[-1] + v * ww) / tw
+            ww = tw; c += cnt[-1]
+            val.pop(); wt.pop(); cnt.pop()
+        val.append(v); wt.append(ww); cnt.append(c)
+    yhat = np.empty(len(ys)); i = 0
+    for v, c in zip(val, cnt):
+        yhat[i:i + c] = v; i += c
+    return xs, yhat
 
 
 def main():
@@ -68,6 +96,9 @@ def main():
     ap.add_argument("--starting-year", type=int, default=None,
                     help="earliest year to include in training (default: current_year - 10). Set lower "
                          "to train on more history, e.g. --starting-year 2008.")
+    ap.add_argument("--recal-method", choices=["isotonic", "platt"], default="isotonic",
+                    help="post-hoc recalibration when --calib-years>0: isotonic (robust, nonparametric, "
+                         "default) or platt (parametric logistic).")
     ap.add_argument("--taxonomy", default=str(pc.DEFAULT_TAX))
     ap.add_argument("--min-checklists", type=int, default=pc.MIN_CHECKLISTS)
     ap.add_argument("--memory-limit", default="4GB")
@@ -210,16 +241,30 @@ def main():
     ll_l, ll_b = agg[4] / N, agg[5] / N
     brier_clim = base_rate * (1 - base_rate)               # climatology: always predict the base rate
 
-    # optional Platt recalibration: fit (a,b) on the CALIB block, apply to TEST (never fit on test)
-    pl_recal = None; brier_r = ll_r = aP = bP = None
+    # optional recalibration: fit the map on the CALIB block, apply to TEST (never fit on test)
+    recal_src, recal_expr, recal_label = "ev", pl, ""
+    brier_r = ll_r = None
     if recal:
-        cbdf = con.execute(f"""SELECT round(least(1-{EPS},greatest({EPS},{pl}))*400)/400.0 AS p,
-            SUM(n_chk) n, SUM(n_det) d FROM cal GROUP BY 1 HAVING SUM(n_chk)>0""").fetchdf()
-        aP, bP = fit_platt(cbdf["p"].values, cbdf["d"].values, cbdf["n"].values)
-        pl_recal = (f"least(1-{EPS}, greatest({EPS}, "
-                    f"1.0/(1.0+exp(-({aP}+({bP})*ln(({pl})/(1.0-({pl}))))))))")
-        ar = con.execute(f"""SELECT SUM(n_det*pow(1-{pl_recal},2)+(n_chk-n_det)*pow({pl_recal},2)) br,
-            -SUM(n_det*ln({pl_recal})+(n_chk-n_det)*ln(1-{pl_recal})) lr FROM ev""").fetchone()
+        cbdf = con.execute(f"""SELECT round({pl}*400)/400.0 AS p, SUM(n_chk) n, SUM(n_det) d
+            FROM cal GROUP BY 1 HAVING SUM(n_chk)>0 ORDER BY 1""").fetchdf()
+        if a.recal_method == "platt":
+            aP, bP = fit_platt(cbdf["p"].values, cbdf["d"].values, cbdf["n"].values)
+            recal_expr = (f"least(1-{EPS}, greatest({EPS}, "
+                          f"1.0/(1.0+exp(-({aP}+({bP})*ln(({pl})/(1.0-({pl}))))))))")
+            recal_label = f"Platt (a={aP:.3f}, b={bP:.3f})"
+        else:                                          # isotonic: build a monotone grid map, join it on
+            xs, yh = isotonic_fit(cbdf["p"].values, (cbdf["d"] / cbdf["n"]).values, cbdf["n"].values)
+            gi = np.arange(1001)
+            rmap = pd.DataFrame({"gi": gi, "r": np.clip(np.interp(gi / 1000.0, xs, yh), EPS, 1 - EPS)})
+            con.register("recmap", rmap)
+            con.execute(f"""CREATE TEMP TABLE evr AS
+                SELECT e.*, COALESCE(rm.r, {pl}) AS prr
+                FROM (SELECT *, CAST(round({pl}*1000) AS INT) AS gi FROM ev) e
+                LEFT JOIN recmap rm USING (gi);""")
+            recal_src, recal_expr, recal_label = "evr", "prr", "isotonic"
+        cl = f"least(1-{EPS},greatest({EPS},{recal_expr}))"
+        ar = con.execute(f"""SELECT SUM(n_det*pow(1-{cl},2)+(n_chk-n_det)*pow({cl},2)) br,
+            -SUM(n_det*ln({cl})+(n_chk-n_det)*ln(1-{cl})) lr FROM {recal_src}""").fetchone()
         brier_r, ll_r = ar[0] / N, ar[1] / N
 
     print("\n" + "=" * 64)
@@ -230,20 +275,20 @@ def main():
     print(f"  {'duration-blind':<24}{brier_b:>10.4f}{ll_b:>12.4f}{1-brier_b/brier_clim:>13.1%}")
     print(f"  {'lambda (hours)':<24}{brier_l:>10.4f}{ll_l:>12.4f}{1-brier_l/brier_clim:>13.1%}")
     if recal:
-        print(f"  {'lambda + Platt recal':<24}{brier_r:>10.4f}{ll_r:>12.4f}{1-brier_r/brier_clim:>13.1%}")
-        print(f"  (Platt a={aP:.3f}, b={bP:.3f}; fit on calib {calib_lo}-{calib_hi}, scored on test {test_lo}-{a.current_year})")
+        print(f"  {'lambda + recal':<24}{brier_r:>10.4f}{ll_r:>12.4f}{1-brier_r/brier_clim:>13.1%}")
+        print(f"  ({recal_label}; fit on calib {calib_lo}-{calib_hi}, scored on test {test_lo}-{a.current_year})")
     print(f"\n  lambda vs duration-blind:  Brier {(brier_b-brier_l)/brier_b:+.2%}   "
           f"log-loss {(ll_b-ll_l)/ll_b:+.2%}   (positive = lambda better)")
 
     # reliability tables (predicted vs observed), weighted by trials
-    def reliability(expr):
+    def reliability(expr, src="ev"):
         df = con.execute(f"""SELECT least({a.bins-1}, floor(least(1-1e-9,{expr})*{a.bins}))::INT AS bin,
             SUM(n_chk) n, SUM(n_det) d, SUM(({expr})*n_chk)/SUM(n_chk) pred
-            FROM ev GROUP BY 1 ORDER BY 1""").fetchdf()
+            FROM {src} GROUP BY 1 ORDER BY 1""").fetchdf()
         df["observed"] = df["d"] / df["n"]
         return df
     rel_l, rel_b = reliability(pl), reliability(pb)
-    rel_r = reliability(pl_recal) if recal else None
+    rel_r = reliability(recal_expr, recal_src) if recal else None
     con.close()
     Path(obs_pq).unlink(missing_ok=True)
 
