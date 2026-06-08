@@ -32,6 +32,16 @@ Deferred features and known limitations, roughly in priority order.
   travel-distance / time-budget constraints.
 
 ## Modeling
+- **Empirical-Bayes / partial pooling of per-cell λ & occupancy (potential future avenue, not
+  currently needed).** The hold-out validation showed the raw λ predictions are slightly
+  over-dispersed — noisy per-(hotspot, week, species) estimates from thin cells, which flattens the
+  reliability curve. A post-hoc isotonic recalibration already fixes this and lands the λ model
+  essentially on the diagonal (US 2008+ hold-out: Brier 0.137, skill 28%, beating both duration-blind
+  and raw λ), so this is optional. The principled version would shrink each cell's λ/occupancy toward
+  a coarser prior (cell → species×week×region → species×region) by an evidence-weighted factor
+  n/(n+κ), denoising at the source rather than patching the output. We already do a weak version (Beta
+  prior on the detection rate; OCC_PRIOR_YEARS on the occupancy *gate*); extending it to the occupancy
+  used in predictions is the natural next step if we ever want the curve straight without a recal layer.
 - **Checklist autocorrelation (v3).** `p_trip = 1-(1-d)^k` assumes the k checklists are
   independent; real repeat visits to a site/week are correlated, so the trip probability is
   over-optimistic at higher k (and saturates to ~100% too fast). Needs a correlation model and
