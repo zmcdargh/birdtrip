@@ -90,7 +90,7 @@ def _parse_date(d) -> date:
 
 def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
          hours_per_day: float = 4.0, alpha: float = 0.0, has_lambda: bool = False,
-         user_restricted=None, max_per_species_report: int = 8) -> dict:
+         user_restricted=None, recal=None, max_per_species_report: int = 8) -> dict:
     """Greedy itinerary over a prepared candidate set.
 
     cells : per-(locality_id, week, species) rows with columns
@@ -134,7 +134,7 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
     O_cell: dict = {}
     for (loc, wk), g in cells.groupby(["locality_id", "week"]):
         idx = np.array([sidx[c] for c in g["species_code"].astype(str)])
-        occ = np.zeros(S); occ[idx] = np.clip(g["occupancy"].to_numpy(float), 0, 1)
+        occv = np.clip(g["occupancy"].to_numpy(float), 0, 1)
         dgpv = np.clip(g["detect_given_present"].to_numpy(float), 0, 1)
         if has_lambda and "lambda_hr" in g.columns:           # time-to-detection, per-row fallback
             lam = pd.to_numeric(g["lambda_hr"], errors="coerce").to_numpy()
@@ -142,6 +142,11 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
                             1.0 - np.exp(-np.nan_to_num(lam) * float(hours_per_day)))
         else:
             dpos = 1.0 - (1.0 - dgpv) ** kfb
+        if recal is not None:                                  # calibrate the single-visit detection prob,
+            p1 = np.clip(occv * dpos, 0, 1)                    # then back out a calibrated detect-given-present
+            p1c = recal[np.rint(p1 * (len(recal) - 1)).astype(int)]
+            dpos = np.where(occv > 1e-9, np.clip(p1c / occv, 0, 1), dpos)
+        occ = np.zeros(S); occ[idx] = occv
         D = np.zeros(S); D[idx] = np.clip(dpos, 0, 1)
         O_cell[(loc, int(wk))] = occ
         D_cell[(loc, int(wk))] = D

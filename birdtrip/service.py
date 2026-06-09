@@ -90,6 +90,37 @@ def _pdetect(df: pd.DataFrame, hours, k, has_lambda):
     return (1 - (1 - df["detect_given_present"].astype(float)) ** int(k)).to_numpy()
 
 
+# --- post-hoc recalibration: map raw predicted detection probs onto calibrated ones --------------
+# The isotonic map (a 1001-point predicted->calibrated grid) is produced by validate_holdout
+# --save-recal-map and lives next to the store as <db>.recal.json. Monotone, so rankings are
+# preserved; it just makes the displayed probabilities honest (tempers the high-end over-confidence).
+_RECAL: dict = {}
+
+
+def _recal_map(store: Store):
+    if store.db_path not in _RECAL:
+        import json
+        pq = _parquet(store)
+        paths = ([(pq[:-8] + ".recal.json")] if pq else []) + [os.environ.get("BIRDTRIP_RECAL", "")]
+        arr = None
+        for p in paths:
+            if p and os.path.exists(p):
+                arr = np.asarray(json.load(open(p))["calibrated"], dtype=float)
+                break
+        _RECAL[store.db_path] = arr
+    return _RECAL[store.db_path]
+
+
+def _calibrate(p, store):
+    """Map predicted detection prob(s) through the recalibration grid (no-op if no map)."""
+    m = _recal_map(store)
+    if m is None:
+        return p
+    a = np.clip(np.asarray(p, dtype=float), 0.0, 1.0)
+    out = m[np.rint(a * (len(m) - 1)).astype(int)]
+    return float(out) if np.ndim(p) == 0 else out
+
+
 _SPECIES_CACHE: dict = {}
 
 
@@ -459,7 +490,7 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
         restricted = _itin._restricted(rows.iloc[0].locality) or (lid in ur)
         if exclude_restricted and restricted:
             continue
-        rows["p_eff"] = rows["occupancy"].astype(float) * _pdetect(rows, hours, k, has_lambda)
+        rows["p_eff"] = _calibrate(rows["occupancy"].astype(float) * _pdetect(rows, hours, k, has_lambda), store)
         rows["contrib"] = (rows["w"] ** alpha) * rows["p_eff"]
         rows = rows.sort_values("contrib", ascending=False)
         birds = [{
@@ -620,7 +651,7 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
                 cells = cells[~cells["species_code"].isin(set(life_list))]
             cells = cells[[c for c in cols if c in cells.columns]].copy()
     return _itin.plan(cells, sites, start, n_days, hours_per_day=hours_per_day, alpha=alpha,
-                      has_lambda=has_lambda, user_restricted=ur)
+                      has_lambda=has_lambda, user_restricted=ur, recal=_recal_map(store))
 
 
 def regions(store: Store, level="state") -> list[dict]:
@@ -646,11 +677,10 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
     has_lambda = _has_lambda(store)
     if hours is None:
         hours = float(k)
-    kci = max(1, int(round(hours))) if has_lambda else int(k)   # k used for the CI band
     pq = _parquet(store)
     if pq:
         ll = f"AND species_code NOT IN {_inlist(life_list)}" if life_list else ""
-        lamcol = ", lambda_hr" if has_lambda else ""
+        lamcol = ", lambda_hr, mean_dur_min" if has_lambda else ""
         cell = _q(
             f"SELECT locality, locality_id, week, species_code, common_name, occupancy, "
             f"detect_given_present, det_a, det_b{lamcol} FROM '{pq}' "
@@ -659,7 +689,7 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
         cell = _slice(store, 0.5, locality_id=locality_id, weeks=[week])
         cell = cell[~cell["species_code"].isin(set(life_list))] if not cell.empty else cell
     if not cell.empty:
-        cell["p_trip"] = cell["occupancy"].astype(float) * _pdetect(cell, hours, k, has_lambda)
+        cell["p_trip"] = _calibrate(cell["occupancy"].astype(float) * _pdetect(cell, hours, k, has_lambda), store)
     cell = cell[cell["p_trip"] > 0.001].sort_values("p_trip", ascending=False) if not cell.empty else cell
     name = cell["locality"].iloc[0] if len(cell) else locality_id
 
@@ -672,11 +702,26 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
     dist = poisson_binomial(probs)
     mean = float(probs.sum())
     sd = float((probs * (1 - probs)).sum()) ** 0.5
+    # effort for the CI band: match the point estimate. With lambda, the point uses `hours`, so the
+    # CI must use effective effort hours/mean_dur (NOT round(hours) checklists) or it won't bracket it.
+    if has_lambda and "mean_dur_min" in cell.columns and pd.notna(cell["mean_dur_min"].iloc[0]) \
+            and float(cell["mean_dur_min"].iloc[0]) > 0:
+        kci = float(hours) / (float(cell["mean_dur_min"].iloc[0]) / 60.0)
+    else:
+        kci = int(k)
     birds = []
     for r in cell.itertuples():
-        lo, hi = _detect_ci(r.occupancy, r.det_a, r.det_b, kci)
+        # CI as a RELATIVE band (from the Beta posterior's width) around the calibrated point, so it
+        # always brackets the point and still widens for thin-data cells. occ cancels in the ratio.
+        clo, chi = _detect_ci(r.occupancy, r.det_a, r.det_b, kci)
+        qm = float(r.det_a) / (float(r.det_a) + float(r.det_b))
+        gm = float(r.occupancy) * (1 - (1 - qm) ** kci)           # detection at the same effort, mean rate
+        pt = float(r.p_trip)
+        lo = pt * (clo / gm) if gm > 1e-9 else pt
+        hi = pt * (chi / gm) if gm > 1e-9 else pt
+        lo, hi = max(0.0, min(lo, pt)), min(1.0, max(hi, pt))
         birds.append({"common_name": r.common_name, "species_code": r.species_code,
-                      "p_trip": round(float(r.p_trip), 3), "p_low": lo, "p_high": hi})
+                      "p_trip": round(pt, 3), "p_low": round(lo, 3), "p_high": round(hi, 3)})
     return {
         "locality": name, "locality_id": locality_id, "week": int(week), "month": month_of_week(week),
         "effort_checklists": k, "effort_hours": round(hours, 1),

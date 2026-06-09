@@ -109,6 +109,9 @@ def main():
     ap.add_argument("--recal-method", choices=["isotonic", "platt"], default="isotonic",
                     help="post-hoc recalibration when --calib-years>0: isotonic (robust, nonparametric, "
                          "default) or platt (parametric logistic).")
+    ap.add_argument("--save-recal-map", default=None,
+                    help="write the fitted isotonic calibration map to this JSON path, for the serve "
+                         "layer to apply (a 1001-point predicted->calibrated grid).")
     ap.add_argument("--taxonomy", default=str(pc.DEFAULT_TAX))
     ap.add_argument("--min-checklists", type=int, default=pc.MIN_CHECKLISTS)
     ap.add_argument("--memory-limit", default="4GB")
@@ -306,6 +309,11 @@ def _report(con, a, test_lo, calib_lo, calib_hi, recal):
             gi = np.arange(1001)
             rmap = pd.DataFrame({"gi": gi, "r": np.clip(np.interp(gi / 1000.0, xs, yh), EPS, 1 - EPS)})
             con.register("recmap", rmap)
+            if a.save_recal_map:
+                json.dump({"method": "isotonic", "grid_n": 1000, "fit_on": f"calib {calib_lo}-{calib_hi}",
+                           "calibrated": [round(float(x), 6) for x in rmap["r"].tolist()]},
+                          open(a.save_recal_map, "w"))
+                print(f"  recal map -> {a.save_recal_map}")
             con.execute(f"""CREATE TEMP TABLE evr AS
                 SELECT e.*, COALESCE(rm.r, {pl}) AS prr
                 FROM (SELECT *, CAST(round({pl}*1000) AS INT) AS gi FROM ev) e
