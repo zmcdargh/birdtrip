@@ -152,6 +152,14 @@ def test_recommend_exclude_restricted(client):
     assert victim not in [r["locality_id"] for r in out]
 
 
+def test_season_window_not_year_round_with_gap():
+    from birdtrip.service import _season_window, season_label
+    weeks = [45, 46, 47, 48, 1, 2, 3] + [20, 21, 22, 23]   # winter block + summer block, gap between
+    lo, hi, size = _season_window(weeks, peak=1)            # peak in the winter block
+    assert size <= 12 and season_label(weeks, 1) != "year-round"   # only the winter season, not all year
+    assert season_label(list(range(1, 49)), 24) == "year-round"    # genuinely strong all year -> year-round
+
+
 def test_restricted_access_heuristic():
     from birdtrip.itinerary import _restricted
     assert _restricted("MacDill AFB")

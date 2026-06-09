@@ -152,6 +152,40 @@ def week_range_label(lo: int, hi: int) -> str:
     return week_label(lo) if lo == hi else f"{week_label(lo)} – {week_label(hi)}"
 
 
+def _season_window(weeks, peak: int, n: int = 48):
+    """The CONTIGUOUS block of strong weeks containing the peak week, circular over 1..48. Stops a
+    hotspot that's good in two separate seasons (with a dead gap between) from being labeled
+    'year-round' — we report only the season the shown peak-week birds actually belong to."""
+    s = {int(w) for w in weeks if 1 <= int(w) <= n}
+    peak = int(peak)
+    if peak not in s:
+        return peak, peak, 1
+    if len(s) >= 44:                        # genuinely strong almost all year
+        return 1, n, len(s)
+    lo = peak
+    while True:
+        prev = n if lo == 1 else lo - 1
+        if prev in s and prev != peak:
+            lo = prev
+        else:
+            break
+    hi = peak
+    while True:
+        nxt = 1 if hi == n else hi + 1
+        if nxt in s and nxt != peak:
+            hi = nxt
+        else:
+            break
+    return lo, hi, (hi - lo) % n + 1
+
+
+def season_label(weeks, peak: int) -> str:
+    lo, hi, size = _season_window(weeks, peak)
+    if size >= 40:
+        return "year-round"
+    return week_label(lo) if lo == hi else f"{week_label(lo)} – {week_label(hi)}"
+
+
 def _detect_ci(occ, a, b, k, z=1.2816):
     """80% credible interval for the trip detection probability, propagating the Beta
     posterior on the per-checklist rate (normal approx) through 1-(1-q)^k (monotonic in q)."""
@@ -331,7 +365,7 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
         locid, best_wk, peak = prow.locality_id, int(prow.week), float(prow.contrib)
         strong = cell_scores[(cell_scores["locality_id"] == locid)
                              & (cell_scores["contrib"] >= 0.8 * peak)]["week"]
-        lo, hi = int(strong.min()), int(strong.max())
+        lo, hi, _sz = _season_window(strong, best_wk)
         rows = cand[(cand["locality_id"] == locid) & (cand["week"] == best_wk)] \
             .sort_values("contrib", ascending=False)
         birds = [{
@@ -352,7 +386,7 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
         out.append({
             "locality": head.locality, "locality_id": locid, "state": head.state,
             "week": best_wk, "month": month_of_week(best_wk),
-            "recommended_weeks": [lo, hi], "recommended_label": week_range_label(lo, hi),
+            "recommended_weeks": [lo, hi], "recommended_label": season_label(strong, best_wk),
             "latitude": (None if pd.isna(head.latitude) else round(float(head.latitude), 5)),
             "longitude": (None if pd.isna(head.longitude) else round(float(head.longitude), 5)),
             "score": round(peak, 3), "restricted": bool(restricted),
@@ -418,7 +452,7 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
             break
         lid, best_wk, peak = prow.locality_id, int(prow.week), float(prow.score)
         strong = cs[(cs["locality_id"] == lid) & (cs["score"] >= 0.8 * peak)]["week"]
-        lo, hi = int(strong.min()), int(strong.max())
+        lo, hi, _sz = _season_window(strong, best_wk)
         rows = detail[(detail["locality_id"] == lid) & (detail["week"] == best_wk)].copy()
         if rows.empty:
             continue
@@ -441,7 +475,7 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
         out.append({
             "locality": head.locality, "locality_id": lid, "state": head.state,
             "week": best_wk, "month": month_of_week(best_wk),
-            "recommended_weeks": [lo, hi], "recommended_label": week_range_label(lo, hi),
+            "recommended_weeks": [lo, hi], "recommended_label": season_label(strong, best_wk),
             "latitude": (None if pd.isna(head.latitude) else round(float(head.latitude), 5)),
             "longitude": (None if pd.isna(head.longitude) else round(float(head.longitude), 5)),
             "score": round(peak, 3), "restricted": bool(restricted),
