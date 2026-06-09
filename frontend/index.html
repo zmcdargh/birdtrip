@@ -404,30 +404,54 @@ function selectResult(i){
   showDetail(d);
 }
 
+// ----- bird-list sorting (shared by Find-spots detail + itinerary day panels) -----
+let birdSort = localStorage.getItem('birdtrip_birdsort') || 'prob';   // 'prob' | 'taxon'
+let _rerenderBirds = null;        // set by whichever panel rendered last
+function setBirdSort(mode){
+  birdSort = mode; localStorage.setItem('birdtrip_birdsort', mode);
+  if(_rerenderBirds) _rerenderBirds();
+}
+function sortBirds(arr, pkey){
+  const a = arr.slice();
+  if(birdSort==='taxon') a.sort((x,y)=>(x.taxon_order??9e9)-(y.taxon_order??9e9));
+  else a.sort((x,y)=>(y[pkey]??0)-(x[pkey]??0));
+  return a;
+}
+function sortToggle(){   // taxon option only meaningful when records carry taxon_order
+  const tab = m => `<a href="#" class="ebird" style="${birdSort===m?'font-weight:700;text-decoration:none':''}"
+    onclick="event.preventDefault();setBirdSort('${m}')">${m==='prob'?'likelihood':'taxonomic'}</a>`;
+  return `<div class="hint" style="margin-bottom:6px">Sort: ${tab('prob')} · ${tab('taxon')}</div>`;
+}
+
 async function showDetail(d){
   $('detail').innerHTML='<div class="hint">Loading…</div>';
   try{
     const s=await getJSON('/summary',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({locality_id:d.locality_id, week:d.week, hours:1, life_list:state.lifeList})});
     const cap = x => Math.min(99, Math.max(1, Math.round(x*100)));   // never show 0% or 100%
-    const rows=s.birds.map(b=>{
-      const p=cap(b.p_trip), lo=cap(b.p_low??b.p_trip), hi=cap(b.p_high??b.p_trip);
-      const rangeTxt = (lo===hi) ? `${lo}%` : `${lo}–${hi}%`;
-      return `<div class="bird"><span class="pct">${rangeTxt}</span>
-        <div class="bar"><span class="fill" style="width:${p}%"></span>
-        <span class="fuzz" style="left:${lo}%;width:${Math.max(2,hi-lo)}%"></span>
-        <em>${b.common_name}</em></div></div>`;
-    }).join('');
-    $('detail').innerHTML=`<a href="#" class="ebird" onclick="backToCurves(event)" style="display:inline-block;margin-bottom:6px">← Seasonality</a>
-      <h2 style="margin:0 0 4px">${s.locality} <span style="color:var(--mute);font-weight:400">· ${d.state||''}</span></h2>
-      <div class="meta" style="color:var(--mute);font-size:12.5px">Recommended: ${d.recommended_label} · ${s.effort_hours??1} h of birding
-        · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">View on eBird ↗</a></div>
-      ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ ${d.restricted?"Name suggests restricted/limited access — a heuristic guess, verify before visiting.":"You've marked this hotspot restricted."}</div>`:''}
-      <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — click to unmark':'🚫 mark this hotspot restricted'}</a></div>
-      <div style="margin:8px 0 4px;font-size:14px"><b>${lifers(s.lifers_low,s.lifers_high)}</b> expected lifers
-        · chance of seeing at least one new bird: ${s.p_at_least_one>=0.995?'&gt;99%':Math.round(s.p_at_least_one*100)+'%'}</div>
-      <div class="hint" style="margin-bottom:10px">Filled bar = how likely you are to find each · range on the left = our confidence (wider = fewer records)</div>
-      ${rows}`;
+    const render = ()=>{
+      const rows=sortBirds(s.birds,'p_trip').map(b=>{
+        const p=cap(b.p_trip), lo=cap(b.p_low??b.p_trip), hi=cap(b.p_high??b.p_trip);
+        const rangeTxt = (lo===hi) ? `${lo}%` : `${lo}–${hi}%`;
+        return `<div class="bird"><span class="pct">${rangeTxt}</span>
+          <div class="bar"><span class="fill" style="width:${p}%"></span>
+          <span class="fuzz" style="left:${lo}%;width:${Math.max(2,hi-lo)}%"></span>
+          <em>${b.common_name}</em></div></div>`;
+      }).join('');
+      const hasTax = s.birds.some(b=>b.taxon_order!=null);
+      $('detail').innerHTML=`<a href="#" class="ebird" onclick="backToCurves(event)" style="display:inline-block;margin-bottom:6px">← Seasonality</a>
+        <h2 style="margin:0 0 4px">${s.locality} <span style="color:var(--mute);font-weight:400">· ${d.state||''}</span></h2>
+        <div class="meta" style="color:var(--mute);font-size:12.5px">Recommended: ${d.recommended_label} · ${s.effort_hours??1} h of birding
+          · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">View on eBird ↗</a></div>
+        ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ ${d.restricted?"Name suggests restricted/limited access — a heuristic guess, verify before visiting.":"You've marked this hotspot restricted."}</div>`:''}
+        <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — click to unmark':'🚫 mark this hotspot restricted'}</a></div>
+        <div style="margin:8px 0 4px;font-size:14px"><b>${lifers(s.lifers_low,s.lifers_high)}</b> expected lifers
+          · chance of seeing at least one new bird: ${s.p_at_least_one>=0.995?'&gt;99%':Math.round(s.p_at_least_one*100)+'%'}</div>
+        <div class="hint" style="margin-bottom:10px">Filled bar = how likely you are to find each · range on the left = our confidence (wider = fewer records)</div>
+        ${hasTax?sortToggle():''}
+        ${rows}`;
+    };
+    _rerenderBirds = render; render();
   }catch(e){ $('detail').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
 }
 
@@ -571,10 +595,11 @@ function showDay(i){
   const d=lastPlan.days[i];
   if(!d.locality){ $('detail').innerHTML='<div class="hint">Rest day — no hotspot with data in range this week.</div>'; return; }
   const cap=x=>Math.min(99,Math.max(1,Math.round(x*100)));
-  const rows=d.birds.map(b=>{ const p=cap(b.p_new_here);
+  const rows=sortBirds(d.birds,'p_new_here').map(b=>{ const p=cap(b.p_new_here);
     return `<div class="bird"><span class="pct">${p}%</span>
       <div class="bar"><span class="fill" style="width:${p}%"></span><em>${b.common_name}</em></div></div>`;
   }).join('') || '<div class="hint">Nothing new expected here.</div>';
+  const hasTax = d.birds.some(b=>b.taxon_order!=null);
   $('detail').innerHTML=`<h2 style="margin:0 0 2px;font-size:15px">Day ${d.day}: ${d.locality}</h2>
     <div class="meta" style="color:var(--mute);font-size:12.5px">${d.date} · ${d.week_label} · ${d.dist_km} km from base
       · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">eBird ↗</a></div>
@@ -582,7 +607,9 @@ function showDay(i){
     <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — click to unmark':'🚫 mark this hotspot restricted'}</a></div>
     <div style="margin:8px 0 4px;font-size:14px"><b>+${d.expected_new}</b> expected new lifers this day</div>
     <div class="hint" style="margin-bottom:8px">Most likely new birds here, discounting what you've probably already seen earlier in the trip:</div>
+    ${hasTax?sortToggle():''}
     ${rows}`;
+  _rerenderBirds = ()=>showDay(i);
 }
 </script>
 </body>

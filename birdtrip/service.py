@@ -59,16 +59,23 @@ def _inlist(vals) -> str:
 _HAS_LAMBDA: dict = {}
 
 
-def _has_lambda(store: Store) -> bool:
-    if store.db_path not in _HAS_LAMBDA:
+_COLS: dict = {}
+
+
+def _store_cols(store: Store) -> set:
+    if store.db_path not in _COLS:
         pq = _parquet(store)
         if pq:
             cols = set(_q(f"SELECT * FROM '{pq}' LIMIT 0").columns)
         else:
             import sqlite3
             cols = {r[1] for r in sqlite3.connect(store.db_path).execute("PRAGMA table_info(cells)")}
-        _HAS_LAMBDA[store.db_path] = "lambda_hr" in cols
-    return _HAS_LAMBDA[store.db_path]
+        _COLS[store.db_path] = cols
+    return _COLS[store.db_path]
+
+
+def _has_lambda(store: Store) -> bool:
+    return "lambda_hr" in _store_cols(store)
 
 
 def _pdetect_sql(hours, k, has_lambda) -> str:
@@ -634,7 +641,8 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
 
     locids = sites["locality_id"].tolist()
     cols = ["locality_id", "week", "species_code", "common_name", "occupancy",
-            "detect_given_present", "w"] + (["lambda_hr"] if has_lambda else [])
+            "detect_given_present", "w"] + (["lambda_hr"] if has_lambda else []) \
+        + (["taxon_order"] if "taxon_order" in _store_cols(store) else [])
     if pq:
         where = [f"locality_id IN {_inlist(locids)}", f"week IN ({wkin})", "trusted=1"]
         if targets:
@@ -681,9 +689,10 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
     if pq:
         ll = f"AND species_code NOT IN {_inlist(life_list)}" if life_list else ""
         lamcol = ", lambda_hr, mean_dur_min" if has_lambda else ""
+        taxcol = ", taxon_order" if "taxon_order" in _store_cols(store) else ""
         cell = _q(
             f"SELECT locality, locality_id, week, species_code, common_name, occupancy, "
-            f"detect_given_present, det_a, det_b{lamcol} FROM '{pq}' "
+            f"detect_given_present, det_a, det_b{lamcol}{taxcol} FROM '{pq}' "
             f"WHERE locality_id={_lit(locality_id)} AND week={int(week)} AND trusted=1 {ll}")
     else:
         cell = _slice(store, 0.5, locality_id=locality_id, weeks=[week])
@@ -709,6 +718,7 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
         kci = float(hours) / (float(cell["mean_dur_min"].iloc[0]) / 60.0)
     else:
         kci = int(k)
+    has_tax = "taxon_order" in cell.columns
     birds = []
     for r in cell.itertuples():
         # CI as a RELATIVE band (from the Beta posterior's width) around the calibrated point, so it
@@ -721,7 +731,8 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
         hi = pt * (chi / gm) if gm > 1e-9 else pt
         lo, hi = max(0.0, min(lo, pt)), min(1.0, max(hi, pt))
         birds.append({"common_name": r.common_name, "species_code": r.species_code,
-                      "p_trip": round(pt, 3), "p_low": round(lo, 3), "p_high": round(hi, 3)})
+                      "p_trip": round(pt, 3), "p_low": round(lo, 3), "p_high": round(hi, 3),
+                      "taxon_order": (float(r.taxon_order) if has_tax and pd.notna(r.taxon_order) else None)})
     return {
         "locality": name, "locality_id": locality_id, "week": int(week), "month": month_of_week(week),
         "effort_checklists": k, "effort_hours": round(hours, 1),

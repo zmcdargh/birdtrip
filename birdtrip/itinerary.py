@@ -122,6 +122,7 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
     S = len(universe)
     sidx = {code: i for i, code in enumerate(universe)}
     names = dict(zip(cells["species_code"].astype(str), cells["common_name"]))
+    tax = dict(zip(cells["species_code"].astype(str), cells["taxon_order"])) if "taxon_order" in cells.columns else {}
     # rarity weight per species (max across cells; w is a species/region property here)
     wvec = np.ones(S)
     for code, wv in cells.groupby(cells["species_code"].astype(str))["w"].max().items():
@@ -212,7 +213,8 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
             code = universe[j]
             birds.append({"species_code": code, "common_name": names.get(code, code),
                           "p_new_here": round(float(best_gain[j]), 3),
-                          "rarity_weight": round(float(wvec[j]), 2)})
+                          "rarity_weight": round(float(wvec[j]), 2),
+                          "taxon_order": (float(tax[code]) if code in tax and pd.notna(tax[code]) else None)})
         restricted = _restricted(m.locality) or (best_loc in ur)
         days_out.append({
             "day": di, "date": the_date.isoformat(), "week": wk, "week_label": week_label(wk),
