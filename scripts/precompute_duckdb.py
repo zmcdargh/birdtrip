@@ -140,7 +140,8 @@ def main():
              WHEN "REPORT_AS" <> '' THEN "REPORT_AS" ELSE NULL END AS species_code
       FROM {read_comma(a.taxonomy)} WHERE "SCI_NAME" <> '';
     CREATE TEMP TABLE spinfo AS
-      SELECT "SPECIES_CODE" AS species_code, "PRIMARY_COM_NAME" AS common_name, "SCI_NAME" AS sci_name
+      SELECT "SPECIES_CODE" AS species_code, "PRIMARY_COM_NAME" AS common_name, "SCI_NAME" AS sci_name,
+             TRY_CAST("TAXON_ORDER" AS DOUBLE) AS taxon_order
       FROM {read_comma(a.taxonomy)} WHERE "CATEGORY"='species';
     """)
 
@@ -211,7 +212,7 @@ def main():
     C = DGP_PRIOR
     core = f"""
       SELECT lm.state, lm.state_code, lm.county, lm.locality, det.locid AS locality_id,
-             lm.latitude, lm.longitude, det.week, sn.sci_name, sn.common_name, det.species_code,
+             lm.latitude, lm.longitude, det.week, sn.sci_name, sn.common_name, sn.taxon_order, det.species_code,
              den.n_checklists, least(det.n_detections, den.n_checklists) AS n_detections,
              least(1.0, det.n_detections::DOUBLE / den.n_checklists) AS freq_raw,
              least(1.0, (det.n_detections + (sd.s_det::DOUBLE/sden.s_chk) * {PRIOR_STRENGTH})
@@ -297,7 +298,7 @@ def main():
             locality AS "LOCALITY", locality_id AS "LOCALITY ID", latitude, longitude, week,
             sci_name AS "SCIENTIFIC NAME", common_name AS "COMMON NAME", n_checklists, n_detections,
             freq_raw, freq_shrunk, years_surveyed, years_present, occupancy,
-            detect_given_present, p_lifer_1, det_a, det_b, w, mean_dur_min, lambda_hr, trusted
+            detect_given_present, p_lifer_1, det_a, det_b, w, mean_dur_min, lambda_hr, taxon_order, trusted
             FROM ({final})"""
         con.execute(f"COPY ({up}) TO '{a.out}' (HEADER, DELIMITER ',');")
         n = con.execute(f"SELECT COUNT(*) FROM read_csv('{a.out}', delim=',', header=true)").fetchone()[0]
