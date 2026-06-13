@@ -171,6 +171,17 @@ def test_restricted_access_heuristic():
     assert not _restricted(None)
 
 
+def test_itinerary_auto_window(client):
+    # omit start_date -> the model sweeps the year and returns the best N-day window + a curve
+    from birdtrip.itinerary import date_to_week, _parse_date
+    plan = client.post("/itinerary", json={**CP, "radius_km": 200, "n_days": 3}).json()
+    assert plan.get("auto_window") is True
+    assert len(plan["window_curve"]) >= 10 and plan["expected_lifers_total"] > 0 and plan["days"]
+    peak = max(plan["window_curve"], key=lambda c: c["expected_lifers"])     # returned plan IS the argmax
+    assert abs(peak["expected_lifers"] - plan["expected_lifers_total"]) < 0.05
+    assert 14 <= date_to_week(_parse_date(plan["start_date"])) <= 24         # spring-migration peak
+
+
 def test_itinerary_out_of_range_base(client):
     # a base in the middle of the Pacific reaches nothing -> graceful empty plan
     body = {"base_lat": 0.0, "base_lon": -150.0, "radius_km": 50,

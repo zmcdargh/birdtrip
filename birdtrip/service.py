@@ -662,6 +662,75 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
                       has_lambda=has_lambda, user_restricted=ur, recal=_recal_map(store))
 
 
+def plan_itinerary_window(store: Store, base_lat, base_lon, radius_km, n_days,
+                          hours_per_day=4.0, alpha=0.0, life_list=(), targets=None, occ_gate=0.5,
+                          max_sites=80, exclude_restricted=False, user_restricted=None,
+                          step_days=14, ref_year=2026) -> dict:
+    """Pick-a-time: no start date given. Sweep candidate start dates across the year over the SAME
+    base+radius, run the greedy N-day plan for each, and return the best window's plan plus a
+    seasonal expected-lifers curve (so the user sees why that window won)."""
+    from datetime import date, timedelta
+    has_lambda = _has_lambda(store)
+    pq = _parquet(store)
+    ur = set(user_restricted or [])
+    ref0 = date(ref_year, 1, 1)
+    sites = _candidate_sites(store, pq, float(base_lat), float(base_lon), float(radius_km))
+    if sites.empty:
+        return _itin._empty(ref0, n_days, hours_per_day, sites)
+    if exclude_restricted:
+        keep = ~(sites["locality"].map(_itin._restricted) | sites["locality_id"].isin(ur))
+        sites = sites[keep].reset_index(drop=True)
+        if sites.empty:
+            return _itin._empty(ref0, n_days, hours_per_day, sites)
+    targets = list(targets) if targets else None
+    life_list = list(life_list)
+    sp = (f"AND species_code IN {_inlist(targets)}" if targets
+          else f"AND species_code NOT IN {_inlist(life_list)}" if life_list else "")
+    # richness prefilter over ALL weeks (stable candidate set across windows), by richness not proximity
+    if pq and len(sites) > max_sites:
+        pdet = _pdetect_sql(hours_per_day, max(1, int(round(hours_per_day))), has_lambda)
+        rich = _q(f"""SELECT locality_id, MAX(s) rich FROM (
+            SELECT locality_id, week, SUM(occupancy*{pdet}) s FROM '{pq}'
+            WHERE locality_id IN {_inlist(sites['locality_id'].tolist())} AND trusted=1 {sp}
+            GROUP BY locality_id, week) GROUP BY locality_id ORDER BY rich DESC LIMIT {int(max_sites)}""")
+        sites = sites[sites["locality_id"].isin(set(rich["locality_id"]))].reset_index(drop=True)
+    elif not pq and len(sites) > max_sites:
+        sites = sites.head(max_sites).reset_index(drop=True)
+    locids = sites["locality_id"].tolist()
+    cols = ["locality_id", "week", "species_code", "common_name", "occupancy",
+            "detect_given_present", "w"] + (["lambda_hr"] if has_lambda else []) \
+        + (["taxon_order"] if "taxon_order" in _store_cols(store) else [])
+    if pq:   # fetch cells for ALL weeks once, then sweep windows in memory
+        where = [f"locality_id IN {_inlist(locids)}", "trusted=1"]
+        if targets: where.append(f"species_code IN {_inlist(targets)}")
+        elif life_list: where.append(f"species_code NOT IN {_inlist(life_list)}")
+        cells_all = _q(f"SELECT {', '.join(cols)} FROM '{pq}' WHERE {' AND '.join(where)}")
+    else:
+        cells_all = _slice(store, occ_gate, locality_ids=locids)
+        if not cells_all.empty:
+            if targets: cells_all = cells_all[cells_all["species_code"].isin(set(targets))]
+            elif life_list: cells_all = cells_all[~cells_all["species_code"].isin(set(life_list))]
+            cells_all = cells_all[[c for c in cols if c in cells_all.columns]].copy()
+    recal = _recal_map(store)
+    best = None; curve = []
+    for off in range(0, 364, int(step_days)):
+        d = ref0 + timedelta(days=off)
+        wks = _itin.trip_weeks(d, int(n_days))
+        cw = cells_all[cells_all["week"].isin(wks)] if not cells_all.empty else cells_all
+        plan = _itin.plan(cw, sites, d, int(n_days), hours_per_day=hours_per_day, alpha=alpha,
+                          has_lambda=has_lambda, user_restricted=ur, recal=recal)
+        el = float(plan.get("expected_lifers_total", 0.0))
+        wk = _itin.date_to_week(d)
+        curve.append({"start_date": d.isoformat(), "week": wk, "month": month_of_week(wk),
+                      "expected_lifers": el})
+        if best is None or el > best[0]:
+            best = (el, plan)
+    out = best[1]
+    out["auto_window"] = True
+    out["window_curve"] = curve
+    return out
+
+
 def regions(store: Store, level="state") -> list[dict]:
     """Region selectors (name + centroid + counts), cached. Uses Parquet+DuckDB when present."""
     key = (store.db_path, level)

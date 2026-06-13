@@ -45,6 +45,10 @@ OCC_PRIOR_YEARS = 2      # pseudo unsurveyed-years added when gating: stops a 1-
                          # rarity gate; the displayed per-cell occupancy stays the raw ratio.
 W_FLOOR = 1e-3           # floor on elsewhere-attainability (ratio denominator)
 LOOKBACK_YEARS = 10
+OCC_KAPPA = 3.0          # empirical-Bayes shrinkage strength for the SERVED occupancy: posterior
+                         # occupancy_eb = (years_present + OCC_KAPPA*m)/(years_surveyed + OCC_KAPPA),
+                         # m = state-level regional occupancy (with absences). κ=3 selected by
+                         # held-out log-loss on the NY 2006-2020/21-23/24-26 split (see MODEL.md).
 DEFAULT_TAX = ROOT / "data" / "taxonomy" / "eBird_taxonomy_v2025-4.csv"
 
 WEEK = "((month(d) - 1) * 4 + least(3, CAST(floor((day(d) - 1) / 7.0) AS INTEGER)) + 1)"
@@ -103,6 +107,43 @@ def read_csv(path):  # the EBD / SED are tab-delimited
 
 def read_comma(path):  # the eBird taxonomy is comma-delimited (and quoted)
     return f"read_csv('{path}', delim=',', header=true, all_varchar=true, ignore_errors=true)"
+
+
+def _diag_occupancy(con, out_path):
+    """After the model is built: how much does EB shrinkage (κ=OCC_KAPPA) move occupancy, by
+    years_surveyed, US-wide vs NY? Lets us confirm κ=3 behaves on the full US like it did on NY.
+    Writes <store>_occ_diag.csv and .png."""
+    base = out_path.rsplit(".", 1)[0]
+    def grab(where, scope):
+        return con.execute(f"""SELECT '{scope}' AS scope,
+          CASE WHEN years_surveyed=1 THEN '1' WHEN years_surveyed=2 THEN '2' WHEN years_surveyed=3 THEN '3'
+               WHEN years_surveyed<=5 THEN '4-5' WHEN years_surveyed<=10 THEN '6-10' ELSE '11+' END AS nsb,
+          CASE WHEN years_surveyed=1 THEN 1 WHEN years_surveyed=2 THEN 2 WHEN years_surveyed=3 THEN 3
+               WHEN years_surveyed<=5 THEN 4 WHEN years_surveyed<=10 THEN 5 ELSE 6 END AS ord,
+          count(*) AS n, median(occupancy_raw) AS raw_med, median(occupancy) AS eb_med
+          FROM cells_l WHERE occupancy_raw>=0.9 {where} GROUP BY 1,2,3""").df()
+    us = grab("", "US"); ny = grab("AND state='New York'", "NY")
+    import pandas as pd
+    df = pd.concat([us, ny]).sort_values(["scope", "ord"])
+    df.to_csv(base + "_occ_diag.csv", index=False)
+    print("\noccupancy EB shrinkage (κ={:.0f}) among naive≥0.9 cells, median raw→eb by years_surveyed:".format(OCC_KAPPA))
+    print(df[["scope", "nsb", "n", "raw_med", "eb_med"]].round(3).to_string(index=False), flush=True)
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+        order = ["1", "2", "3", "4-5", "6-10", "11+"]
+        fig, ax = plt.subplots(figsize=(8, 5))
+        for scope, col in [("US", "#2471a3"), ("NY", "#c0392b")]:
+            d = df[df.scope == scope].set_index("nsb").reindex(order)
+            ax.plot(order, d.eb_med, "-o", color=col, label=f"{scope}  EB κ={OCC_KAPPA:.0f}")
+        ax.axhline(1.0, color="#bbb", ls=":", lw=1, label="naive (≈1.0)")
+        ax.set_ylim(0, 1.05); ax.set_xlabel("years_surveyed"); ax.set_ylabel("median EB occupancy (naive≥0.9 cells)")
+        ax.set_title(f"EB occupancy shrinkage by survey history — US vs NY (κ={OCC_KAPPA:.0f})\nclose curves ⇒ κ generalizes from NY to the full US", fontsize=11, loc="left")
+        ax.legend(fontsize=9)
+        for s in ("top", "right"): ax.spines[s].set_visible(False)
+        fig.tight_layout(); fig.savefig(base + "_occ_diag.png", dpi=140, bbox_inches="tight")
+        print(f"  occupancy diagnostic -> {base}_occ_diag.png / .csv", flush=True)
+    except Exception as e:
+        print(f"  (diagnostic plot skipped: {e}; CSV written)", flush=True)
 
 
 def main():
@@ -203,6 +244,16 @@ def main():
            FROM det_y dy JOIN den_y d USING (locid, week, yr)
            WHERE d.nchk >= {MIN_CHECKLISTS_YEAR} GROUP BY 1,2,3;
     """)
+    # state-level regional occupancy prior m (WITH absences) for the EB occupancy shrinkage:
+    #   st_surv = total surveyed site-years per (state, week)   (denominator, species-independent)
+    #   st_pres = total present  site-years per (state, species, week)   (numerator)
+    #   m = st_pres / st_surv  -> the per-cell prior the shrinkage pulls toward.
+    con.execute("""
+    CREATE TEMP TABLE st_surv AS SELECT lm.state, sv.week, SUM(sv.years_surveyed) tn
+        FROM surveyed sv JOIN locmeta lm USING (locid) GROUP BY 1,2;
+    CREATE TEMP TABLE st_pres AS SELECT lm.state, p.species_code, p.week, SUM(p.years_present) tp
+        FROM present p JOIN locmeta lm USING (locid) GROUP BY 1,2,3;
+    """)
 
     trusted_filter = "" if a.keep_untrusted else f"WHERE den.n_checklists >= {MIN_CHECKLISTS}"
     # core projection. ALL static per-cell work is done here (not per request): the Beta-shrunk
@@ -220,7 +271,14 @@ def main():
              COALESCE(sv.years_surveyed,0) AS years_surveyed,
              COALESCE(p.years_present,0)  AS years_present,
              CASE WHEN COALESCE(sv.years_surveyed,0)>0
-                  THEN COALESCE(p.years_present,0)::DOUBLE/sv.years_surveyed ELSE 0 END AS occupancy,
+                  THEN COALESCE(p.years_present,0)::DOUBLE/sv.years_surveyed ELSE 0 END AS occupancy_raw,
+             COALESCE(COALESCE(spr.tp,0)::DOUBLE/NULLIF(ssv.tn,0),0) AS occ_prior,
+             -- SERVED occupancy `occupancy` = empirical-Bayes shrinkage of years_present/years_surveyed
+             -- toward the state regional rate m (with absences), strength OCC_KAPPA (κ=3, held-out
+             -- validated). Stored in the `occupancy` column so the serve layer uses it unchanged;
+             -- the raw ratio is kept as occupancy_raw for diagnostics.
+             (COALESCE(p.years_present,0) + {OCC_KAPPA}*COALESCE(COALESCE(spr.tp,0)::DOUBLE/NULLIF(ssv.tn,0),0))
+                 / (COALESCE(sv.years_surveyed,0) + {OCC_KAPPA}) AS occupancy,
              -- Beta posterior on the per-checklist detection rate, prior = regional rate (s_det/s_chk)
              (COALESCE(p.det_present,0) + {C} * CASE WHEN COALESCE(sden.s_chk,0)>0 THEN sd.s_det::DOUBLE/sden.s_chk ELSE 0 END) AS det_a,
              (greatest(0, COALESCE(p.chk_present,0)-COALESCE(p.det_present,0)) + {C} * (1 - CASE WHEN COALESCE(sden.s_chk,0)>0 THEN sd.s_det::DOUBLE/sden.s_chk ELSE 0 END)) AS det_b,
@@ -234,6 +292,8 @@ def main():
       LEFT JOIN state_den sden ON sden.state=lm.state AND sden.week=det.week
       LEFT JOIN surveyed sv USING (locid, week)
       LEFT JOIN present p USING (locid, week, species_code)
+      LEFT JOIN st_surv ssv ON ssv.state=lm.state AND ssv.week=det.week
+      LEFT JOIN st_pres spr ON spr.state=lm.state AND spr.species_code=det.species_code AND spr.week=det.week
       {trusted_filter}
     """
     # derive shrunk detection rate + p_lifer from det_a/det_b, then the region-relative weight w
@@ -263,6 +323,10 @@ def main():
     con.execute(f"""CREATE TEMP TABLE cellsh AS SELECT c.*, {histcols}
         FROM cells0 c LEFT JOIN dur_h dh ON dh.locid=c.locality_id AND dh.week=c.week;""")
     con.execute(f"CREATE TEMP TABLE cells_l AS {_lambda_sql('cellsh')};")
+    try:
+        _diag_occupancy(con, a.out)
+    except Exception as e:
+        print(f"  (occupancy diagnostic skipped: {e})", flush=True)
     final = ("SELECT c.* EXCLUDE (_nchk_keep), wtab.w FROM cells_l c "
              "JOIN wtab USING (state, species_code)")
 
@@ -297,7 +361,7 @@ def main():
         up = f"""SELECT state AS "STATE", state_code AS "STATE CODE", county AS "COUNTY",
             locality AS "LOCALITY", locality_id AS "LOCALITY ID", latitude, longitude, week,
             sci_name AS "SCIENTIFIC NAME", common_name AS "COMMON NAME", n_checklists, n_detections,
-            freq_raw, freq_shrunk, years_surveyed, years_present, occupancy,
+            freq_raw, freq_shrunk, years_surveyed, years_present, occupancy, occupancy_raw, occ_prior,
             detect_given_present, p_lifer_1, det_a, det_b, w, mean_dur_min, lambda_hr, taxon_order, trusted
             FROM ({final})"""
         con.execute(f"COPY ({up}) TO '{a.out}' (HEADER, DELIMITER ',');")

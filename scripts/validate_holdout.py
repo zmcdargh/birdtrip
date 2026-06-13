@@ -235,6 +235,22 @@ def main():
         FROM cells0 c LEFT JOIN dur_h dh ON dh.locid=c.locid AND dh."week"=c."week";""")
     con.execute(f"CREATE TEMP TABLE model AS {pc._lambda_sql('cellsh')};")
 
+    # ---- regional occupancy prior m (state level, WITH absences) + per-cell shrinkage ingredients.
+    #      Lets the kappa sweep recompute EB occupancy = (yp + kappa*m)/(ns + kappa) downstream. ----
+    con.execute("""
+    CREATE TEMP TABLE occ_sp AS SELECT ls.state, p.species_code, p."week", SUM(p.years_present) tp
+        FROM present p JOIN locst ls USING(locid) GROUP BY 1,2,3;
+    CREATE TEMP TABLE occ_sv AS SELECT ls.state, sv."week", SUM(sv.years_surveyed) tn
+        FROM surveyed sv JOIN locst ls USING(locid) GROUP BY 1,2;
+    CREATE TEMP TABLE occ_in AS
+        SELECT c.locid, c."week", c.species_code, c.occupancy,
+               c.years_present AS yp, c.years_surveyed AS ns,
+               COALESCE(osp.tp,0)/NULLIF(osv.tn,0) AS prior
+        FROM cells0 c JOIN locst ls USING(locid)
+        LEFT JOIN occ_sp osp ON osp.state=ls.state AND osp.species_code=c.species_code AND osp."week"=c."week"
+        LEFT JOIN occ_sv osv ON osv.state=ls.state AND osv."week"=c."week";
+    """)
+
     # ---- held-out aggregates: cross each trained (cell, species) with that cell's duration buckets ----
     print("aggregating held-out years…", flush=True)
     bc = bucket_case("dur")
@@ -249,22 +265,42 @@ def main():
             GROUP BY locid,"week",species_code,{bc};""")
         con.execute(f"""CREATE TEMP TABLE {name} AS
             SELECT m.occupancy AS occ, m.detect_given_present AS dgp, m.lambda_hr AS lam,
-                   cb.tb/60.0 AS th, cb.n_chk AS n_chk, COALESCE(d.n_det,0) AS n_det
+                   cb.tb/60.0 AS th, cb.n_chk AS n_chk, COALESCE(d.n_det,0) AS n_det,
+                   oi.yp AS yp, oi.ns AS ns, oi.prior AS prior
             FROM model m JOIN {name}_cb cb ON cb.locid=m.locid AND cb."week"=m."week"
+            JOIN occ_in oi ON oi.locid=m.locid AND oi."week"=m."week" AND oi.species_code=m.species_code
             LEFT JOIN {name}_det d ON d.locid=m.locid AND d."week"=m."week"
                  AND d.species_code=m.species_code AND d.bk=cb.bk
             WHERE m.lambda_hr IS NOT NULL;""")
 
+    # occupancy trials: one row per (trained cell, surveyed test/calib YEAR), present 0/1 (absence-inclusive)
+    def build_occ_trials(name, ylo, yhi):
+        con.execute(f"""CREATE TEMP TABLE {name}_oc_surv AS
+            SELECT locid,"week",yr FROM (SELECT locid,"week",yr,COUNT(*) nchk FROM chk_all
+                WHERE yr BETWEEN {ylo} AND {yhi} GROUP BY 1,2,3) WHERE nchk >= {MINY};""")
+        con.execute(f"""CREATE TEMP TABLE {name}_oc_pres AS
+            SELECT DISTINCT locid,"week",yr,species_code FROM '{obs_pq}' WHERE yr BETWEEN {ylo} AND {yhi};""")
+        con.execute(f"""CREATE TEMP TABLE {name}_occ AS
+            SELECT oi.species_code, oi.locid, oi."week", oi.yp, oi.ns, oi.prior, oi.occupancy,
+                   CASE WHEN pr.species_code IS NOT NULL THEN 1 ELSE 0 END AS present
+            FROM occ_in oi JOIN {name}_oc_surv s ON s.locid=oi.locid AND s."week"=oi."week"
+            LEFT JOIN {name}_oc_pres pr ON pr.locid=oi.locid AND pr."week"=oi."week"
+                 AND pr.species_code=oi.species_code AND pr.yr=s.yr;""")
+
     build_trials("ev", test_lo, a.current_year)           # TEST block (final evaluation)
+    build_occ_trials("ev", test_lo, a.current_year)
     if recal:
         build_trials("cal", calib_lo, calib_hi)           # CALIBRATION block (fits the recal map only)
+        build_occ_trials("cal", calib_lo, calib_hi)
     Path(obs_pq).unlink(missing_ok=True)                  # done with the scan intermediate
 
     if a.save_trials:                                     # cache the small trial tables for fast re-runs
         sd = Path(a.save_trials); sd.mkdir(parents=True, exist_ok=True)
         con.execute(f"COPY ev TO '{sd / 'ev.parquet'}' (FORMAT PARQUET);")
+        con.execute(f"COPY ev_occ TO '{sd / 'ev_occ.parquet'}' (FORMAT PARQUET);")
         if recal:
             con.execute(f"COPY cal TO '{sd / 'cal.parquet'}' (FORMAT PARQUET);")
+            con.execute(f"COPY cal_occ TO '{sd / 'cal_occ.parquet'}' (FORMAT PARQUET);")
         json.dump({"test_lo": test_lo, "calib_lo": calib_lo, "calib_hi": calib_hi,
                    "current_year": a.current_year, "recal": recal}, open(sd / "meta.json", "w"))
         print(f"saved trials -> {sd}  (re-run recalibration instantly with --from-trials {sd})")

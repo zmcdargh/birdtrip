@@ -142,6 +142,8 @@
         <label>Trip start</label>
         <input type="date" id="startdate"
           style="width:100%;font-size:12px;padding:5px;border:1px solid var(--line);border-radius:4px"/>
+        <label style="display:block;margin-top:6px;font-size:12px;color:var(--mute);font-weight:400;cursor:pointer">
+          <input type="checkbox" id="autowindow"/> Find the best time for me</label>
       </div>
       <div class="ctl">
         <label>Trip length: <span class="val" id="dayval">5 days</span></label>
@@ -247,7 +249,11 @@ $('lifefile').onchange = async e=>{
   const f=e.target.files[0]; if(!f) return; const fd=new FormData(); fd.append('file',f);
   $('lifestatus').textContent='Parsing…';
   try{ const j=await getJSON('/lifelist',{method:'POST',body:fd}); state.lifeList=j.species_codes||[];
-    $('lifestatus').textContent=`${j.n_species} species on your list — excluded.`; }
+    $('lifestatus').textContent=`${j.n_species} species on your list — excluded.`;
+    // any results shown were computed before this list loaded (stale: ranking + expected-lifer
+    // counts ignored the list). Re-run the active view so everything uses the list consistently.
+    if(state.mode==='itinerary'){ if(lastPlan) $('plan').onclick(); }
+    else if(state.hasSearched){ runRecommend(); } }
   catch(err){ $('lifestatus').textContent='⚠ '+err.message; }
 };
 
@@ -518,18 +524,21 @@ function setBase(latlng){
 }
 map.on('click',e=>{ if(state.mode==='itinerary') setBase(e.latlng); });
 
+$('autowindow').onchange = ()=>{ $('startdate').disabled = $('autowindow').checked; };
 $('plan').onclick=async ()=>{
   if(!baseMarker){ $('itinstatus').textContent='⚠ Click the map to drop a base first.'; return; }
-  if(!$('startdate').value){ $('itinstatus').textContent='⚠ Pick a trip start date.'; return; }
+  const auto=$('autowindow').checked;
+  if(!auto && !$('startdate').value){ $('itinstatus').textContent='⚠ Pick a trip start date, or check “Find the best time for me”.'; return; }
   const my=++planSeq;
-  $('plan').disabled=true; $('plan').textContent='Planning…';
-  $('results').innerHTML='<div class="loading"><div class="spin"></div>Planning your trip…</div>';
+  $('plan').disabled=true; $('plan').textContent= auto?'Finding the best time…':'Planning…';
+  $('results').innerHTML='<div class="loading"><div class="spin"></div>'+(auto?'Searching the whole year for the best window…':'Planning your trip…')+'</div>';
   const b=baseMarker.getLatLng();
   const targets=state.targets.map(t=>t.code);
   const body={ base_lat:b.lat, base_lon:b.lng, radius_km:+$('radius').value,
-    start_date:$('startdate').value, n_days:+$('ndays').value, hours_per_day:+$('kday').value,
+    n_days:+$('ndays').value, hours_per_day:+$('kday').value,
     alpha:state.alpha, life_list:state.lifeList, targets:(targets.length?targets:null),
     exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
+  if(!auto) body.start_date=$('startdate').value;
   try{
     const plan=await getJSON('/itinerary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(my!==planSeq) return; renderItinerary(plan);
@@ -537,14 +546,26 @@ $('plan').onclick=async ()=>{
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 };
 
+function windowCurveHTML(curve, chosen){
+  if(!curve||!curve.length) return '';
+  const mx=Math.max(...curve.map(c=>c.expected_lifers))||1;
+  const bars=curve.map(c=>{ const h=Math.max(2,Math.round(40*c.expected_lifers/mx)); const on=c.start_date===chosen;
+    return `<div title="${c.month}: ${c.expected_lifers.toFixed(1)} expected lifers" style="flex:1;height:${h}px;background:${on?'#27ae60':'#cdd7e0'};border-radius:2px 2px 0 0"></div>`; }).join('');
+  return `<div style="margin:4px 0 10px">
+    <div class="hint" style="margin-bottom:3px">Expected lifers by start week across the year (green = chosen window):</div>
+    <div style="display:flex;align-items:flex-end;gap:2px;height:42px">${bars}</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mute);margin-top:1px"><span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Dec</span></div></div>`;
+}
 function renderItinerary(plan, fit=true){
   lastPlan=plan; itinLayer.clearLayers();
   if(!plan.days.length){ $('results').innerHTML='<div class="hint">'+(plan.message||'No reachable hotspots.')+'</div>';
     $('itinstatus').textContent=plan.message||'Nothing in range.'; $('birdfindwrap').style.display='none'; return; }
-  $('itinstatus').textContent=`${plan.expected_lifers_total} expected lifers over ${plan.n_days} day${plan.n_days>1?'s':''}.`;
+  const auto=plan.auto_window;
+  $('itinstatus').textContent=(auto?'Best time found · ':'')+`${plan.expected_lifers_total} expected lifers over ${plan.n_days} day${plan.n_days>1?'s':''}.`;
   $('birdfindwrap').style.display='';
   $('results').innerHTML =
-    `<div style="margin:2px 0 9px;font-size:13.5px"><b>${plan.expected_lifers_total}</b> expected lifers ·
+    (auto?`<div style="margin:2px 0 8px;font-size:13.5px;color:#1e7a44"><b>🗓 Best time to go:</b> starts ${plan.start_date}${plan.days[0]?.week_label?` (${plan.days[0].week_label})`:''}</div>`+windowCurveHTML(plan.window_curve, plan.start_date):'')
+    + `<div style="margin:2px 0 9px;font-size:13.5px"><b>${plan.expected_lifers_total}</b> expected lifers ·
        ${plan.stops.length} stop${plan.stops.length>1?'s':''} · ${plan.hours_per_day??''} h/day · ${plan.n_candidate_sites} hotspot${plan.n_candidate_sites>1?'s':''} in range</div>`
     + plan.days.map((d,i)=> d.locality ? `
       <div class="day" data-i="${i}">

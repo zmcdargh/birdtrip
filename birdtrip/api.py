@@ -157,7 +157,8 @@ class ItineraryReq(BaseModel):
     base_lat: float = Field(..., ge=-90, le=90, description="base-camp pin latitude")
     base_lon: float = Field(..., ge=-180, le=180, description="base-camp pin longitude")
     radius_km: float = Field(75.0, gt=0, le=1000, description="how far you'll day-trip from the base")
-    start_date: str = Field(..., description="trip start, YYYY-MM-DD")
+    start_date: str | None = Field(None, description="trip start, YYYY-MM-DD; omit to let the model "
+                                    "find the best N-day window of the year")
     n_days: int = Field(..., ge=1, le=30, description="trip length in days")
     hours_per_day: float = Field(4.0, gt=0, le=24, description="hours of birding per day at a stop")
     alpha: float = Field(0.0, ge=0, description="favor local specialties (0 = max expected lifers)")
@@ -171,11 +172,13 @@ class ItineraryReq(BaseModel):
 
 @app.post("/itinerary")
 def itinerary(req: ItineraryReq):
-    return service.plan_itinerary(
-        _store(), base_lat=req.base_lat, base_lon=req.base_lon, radius_km=req.radius_km,
-        start_date=req.start_date, n_days=req.n_days, hours_per_day=req.hours_per_day, alpha=req.alpha,
-        exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted,
-        life_list=req.life_list, targets=req.targets, max_sites=req.max_sites)
+    common = dict(base_lat=req.base_lat, base_lon=req.base_lon, radius_km=req.radius_km,
+                  n_days=req.n_days, hours_per_day=req.hours_per_day, alpha=req.alpha,
+                  exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted,
+                  life_list=req.life_list, targets=req.targets, max_sites=req.max_sites)
+    if req.start_date:                                  # explicit date -> single-window plan
+        return service.plan_itinerary(_store(), start_date=req.start_date, **common)
+    return service.plan_itinerary_window(_store(), **common)   # pick-a-time: best N-day window
 
 
 class TargetsReq(BaseModel):
