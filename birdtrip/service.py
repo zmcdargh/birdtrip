@@ -568,29 +568,41 @@ def target_sites(store: Store, target_codes, states=None, k=1, life_list=(), occ
     return out
 
 
+_LOCCOORDS: dict = {}
+
+
+def _loc_coords(store, pq) -> pd.DataFrame:
+    """Distinct hotspot coordinates (locality_id, locality, state, lat, lon), built ONCE and cached.
+    The geographic radius prefilter then runs in memory — so repeated itinerary / best-trip calls
+    never re-scan the full store just to find reachable hotspots."""
+    if store.db_path not in _LOCCOORDS:
+        if pq:
+            df = _q(f"SELECT locality_id, any_value(locality) locality, any_value(state) state, "
+                    f"avg(latitude) latitude, avg(longitude) longitude FROM '{pq}' "
+                    f"WHERE trusted=1 AND latitude IS NOT NULL GROUP BY locality_id")
+        else:
+            d = _slice(store)
+            d = d.dropna(subset=["latitude", "longitude"]) if not d.empty else d
+            df = (d.groupby("locality_id")
+                    .agg(locality=("locality", "first"), state=("state", "first"),
+                         latitude=("latitude", "mean"), longitude=("longitude", "mean")).reset_index()
+                  if not d.empty else d)
+        _LOCCOORDS[store.db_path] = df
+    return _LOCCOORDS[store.db_path]
+
+
 def _candidate_sites(store, pq, base_lat, base_lon, radius_km) -> pd.DataFrame:
-    """ALL hotspots within the radius of the base pin (bbox prefilter then exact haversine).
-    Distance is ONLY the reachability cutoff here — there is no nearest-first preference; any
-    capping to a manageable count is done later by expected richness, not proximity."""
+    """ALL hotspots within the radius of the base pin (bbox prefilter then exact haversine), from
+    the cached coordinate table. Distance is ONLY the reachability cutoff — no nearest-first
+    preference; capping to a manageable count is done later by expected richness, not proximity."""
     import math
+    coords = _loc_coords(store, pq)
+    if coords.empty:
+        return coords.copy()
     dlat = radius_km / 111.0
     dlon = radius_km / max(1e-6, 111.0 * math.cos(math.radians(base_lat)))
-    lat0, lat1, lon0, lon1 = base_lat - dlat, base_lat + dlat, base_lon - dlon, base_lon + dlon
-    if pq:
-        df = _q(f"SELECT locality_id, any_value(locality) locality, any_value(state) state, "
-                f"avg(latitude) latitude, avg(longitude) longitude FROM '{pq}' "
-                f"WHERE trusted=1 AND latitude BETWEEN {lat0} AND {lat1} "
-                f"AND longitude BETWEEN {lon0} AND {lon1} GROUP BY locality_id")
-    else:
-        d = _slice(store)
-        if d.empty:
-            return d
-        d = d.dropna(subset=["latitude", "longitude"])
-        d = d[d["latitude"].between(lat0, lat1) & d["longitude"].between(lon0, lon1)]
-        df = (d.groupby("locality_id")
-                .agg(locality=("locality", "first"), state=("state", "first"),
-                     latitude=("latitude", "mean"), longitude=("longitude", "mean"))
-                .reset_index())
+    df = coords[coords["latitude"].between(base_lat - dlat, base_lat + dlat)
+                & coords["longitude"].between(base_lon - dlon, base_lon + dlon)].copy()
     if df.empty:
         return df
     df["dist_km"] = _itin.haversine_km(base_lat, base_lon,
