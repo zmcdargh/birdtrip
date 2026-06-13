@@ -745,7 +745,8 @@ def plan_itinerary_window(store: Store, base_lat, base_lon, radius_km, n_days,
 
 def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_list=(), targets=None,
                     states=None, week=None, n_trips=3, grid_deg=0.9, shortlist=20, radius_km=75.0,
-                    max_sites=80, exclude_restricted=False, user_restricted=None, ref_year=2026) -> dict:
+                    max_sites=80, min_sep_km=None, exclude_restricted=False, user_restricted=None,
+                    ref_year=2026) -> dict:
     """Pick-a-place (and optionally pick-a-time): with no pin given, find the most rewarding trips.
     Two-stage funnel: (1) grid hotspots into clusters; a CHEAP occupancy proxy per (cluster, week)
     = Σ_species max-over-the-cluster's-hotspots(occupancy) ['expected lifers present']; argmax the
@@ -782,8 +783,19 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
                                            state=("state", "first"), nhot=("locality_id", "nunique")).reset_index()
     if prox is None or len(prox) == 0:
         return {"trips": [], "n_clusters": 0}
-    best = prox.loc[prox.groupby(["gy", "gx"])["proxy"].idxmax()]          # best week per cluster
-    best = best.merge(cen, on=["gy", "gx"]).sort_values("proxy", ascending=False).head(int(shortlist))
+    cand = (prox.loc[prox.groupby(["gy", "gx"])["proxy"].idxmax()]         # best week per cluster
+            .merge(cen, on=["gy", "gx"]).sort_values("proxy", ascending=False))
+    # spatial spread: greedily keep the top clusters by proxy, skipping any within min_sep_km of an
+    # already-kept one, so the shortlist (and thus the returned trips) are GEOGRAPHICALLY DISTINCT
+    # rather than several overlapping views of the same rich region.
+    msep = float(min_sep_km) if min_sep_km else float(radius_km) * 1.5
+    keep_idx, kc = [], []
+    for r in cand.itertuples():
+        if all(_itin.haversine_km(float(r.lat), float(r.lon), la, lo) >= msep for la, lo in kc):
+            keep_idx.append(r.Index); kc.append((float(r.lat), float(r.lon)))
+        if len(keep_idx) >= int(shortlist):
+            break
+    best = cand.loc[keep_idx]
     has_lambda = _has_lambda(store); ur = set(user_restricted or [])
     # build each finalist's candidate sites IN MEMORY (cached coords), then fetch ALL their cells in
     # ONE scan and run the greedy per cluster in memory — no per-finalist parquet scans.

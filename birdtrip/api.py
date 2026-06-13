@@ -189,6 +189,7 @@ class BestTripsReq(BaseModel):
     week: int | None = Field(None, ge=1, le=48, description="fix the time of year; omit to also pick the best week per area")
     states: list[str] | None = Field(None, description="restrict the search to these states; omit for nationwide")
     n_trips: int = Field(3, ge=1, le=10, description="how many distinct trips to return")
+    min_sep_km: float | None = Field(None, gt=0, description="minimum spacing between trips; default 1.5x radius")
     life_list: list[str] = Field(default_factory=list)
     targets: list[str] | None = None
     exclude_restricted: bool = False
@@ -199,7 +200,7 @@ class BestTripsReq(BaseModel):
 def best_trips(req: BestTripsReq):
     return service.find_best_trips(
         _store(), n_days=req.n_days, hours_per_day=req.hours_per_day, radius_km=req.radius_km,
-        alpha=req.alpha, week=req.week, states=req.states, n_trips=req.n_trips,
+        alpha=req.alpha, week=req.week, states=req.states, n_trips=req.n_trips, min_sep_km=req.min_sep_km,
         life_list=req.life_list, targets=req.targets,
         exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted)
 
