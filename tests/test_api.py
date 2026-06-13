@@ -183,16 +183,20 @@ def test_itinerary_auto_window(client):
 
 
 def test_best_trips(client):
-    # no pin, no date -> the model finds the best trips (region + week + plan), ranked
-    r = client.post("/best_trips", json={"n_days": 3, "n_trips": 2}).json()
+    # no pin, no date -> the model finds the best trips (region + week + plan), ranked.
+    # small min_sep_km so the two far-apart synthetic hotspots count as distinct trips.
+    from birdtrip.itinerary import haversine_km
+    r = client.post("/best_trips", json={"n_days": 3, "n_trips": 2, "min_sep_km": 100}).json()
     assert r["trips"] and len(r["trips"]) >= 1
     t = r["trips"][0]
     assert t["expected_lifers_total"] > 0 and "plan" in t and 1 <= t["week"] <= 48
     assert t["base_lat"] is not None and t["base_lon"] is not None
     els = [x["expected_lifers_total"] for x in r["trips"]]
     assert els == sorted(els, reverse=True)               # ranked best-first
-    # the returned plan's total matches the trip's headline number
     assert abs(t["plan"]["expected_lifers_total"] - t["expected_lifers_total"]) < 1e-6
+    # any two returned trips are at least min_sep_km apart (distinct destinations)
+    for a, b in [(r["trips"][i], r["trips"][j]) for i in range(len(r["trips"])) for j in range(i + 1, len(r["trips"]))]:
+        assert haversine_km(a["base_lat"], a["base_lon"], b["base_lat"], b["base_lon"]) >= 100 - 1e-6
 
 
 def test_itinerary_out_of_range_base(client):

@@ -189,7 +189,8 @@ class BestTripsReq(BaseModel):
     week: int | None = Field(None, ge=1, le=48, description="fix the time of year; omit to also pick the best week per area")
     states: list[str] | None = Field(None, description="restrict the search to these states; omit for nationwide")
     n_trips: int = Field(3, ge=1, le=10, description="how many distinct trips to return")
-    min_sep_km: float | None = Field(None, gt=0, description="minimum spacing between trips; default 1.5x radius")
+    min_sep_km: float | None = Field(None, gt=0, description="minimum spacing between distinct trips (km); "
+                                     "default ≈ max(3x radius, 350) so trips are different destinations")
     life_list: list[str] = Field(default_factory=list)
     targets: list[str] | None = None
     exclude_restricted: bool = False

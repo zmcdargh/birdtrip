@@ -786,9 +786,10 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
     cand = (prox.loc[prox.groupby(["gy", "gx"])["proxy"].idxmax()]         # best week per cluster
             .merge(cen, on=["gy", "gx"]).sort_values("proxy", ascending=False))
     # spatial spread: greedily keep the top clusters by proxy, skipping any within min_sep_km of an
-    # already-kept one, so the shortlist (and thus the returned trips) are GEOGRAPHICALLY DISTINCT
-    # rather than several overlapping views of the same rich region.
-    msep = float(min_sep_km) if min_sep_km else float(radius_km) * 1.5
+    # already-kept one, so the returned trips are DIFFERENT DESTINATIONS (different regions you'd
+    # travel to), not several pins in one rich area. Default is region-scale (a few hundred km), not
+    # just non-overlapping — bigger than the day-trip radius on purpose. Tunable via min_sep_km.
+    msep = float(min_sep_km) if min_sep_km else max(float(radius_km) * 3.0, 350.0)
     keep_idx, kc = [], []
     for r in cand.itertuples():
         if all(_itin.haversine_km(float(r.lat), float(r.lon), la, lo) >= msep for la, lo in kc):
