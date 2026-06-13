@@ -157,7 +157,7 @@
       <label style="font-weight:400;font-size:12.5px;margin:0 0 8px;display:flex;align-items:center;gap:6px">
         <input type="checkbox" id="exclrestrict"/> Exclude restricted-access spots</label>
       <button id="plan" type="button">Plan trip</button>
-      <div id="itinstatus">Pick a base on the map to start.</div>
+      <div id="itinstatus">Drop a base on the map — or hit Plan with no pin to find the best trips anywhere.</div>
       <div class="ctl" id="birdfindwrap" style="display:none;margin-top:12px">
         <label>Find a bird in this trip <span class="hint">(which day?)</span></label>
         <input type="text" id="birdfind" autocomplete="off" placeholder="e.g. Red-cockaded Woodpecker"
@@ -526,7 +526,7 @@ map.on('click',e=>{ if(state.mode==='itinerary') setBase(e.latlng); });
 
 $('autowindow').onchange = ()=>{ $('startdate').disabled = $('autowindow').checked; };
 $('plan').onclick=async ()=>{
-  if(!baseMarker){ $('itinstatus').textContent='⚠ Click the map to drop a base first.'; return; }
+  if(!baseMarker){ return runBestTrips(); }      // no pin dropped → find the best trips anywhere
   const auto=$('autowindow').checked;
   if(!auto && !$('startdate').value){ $('itinstatus').textContent='⚠ Pick a trip start date, or check “Find the best time for me”.'; return; }
   const my=++planSeq;
@@ -545,6 +545,44 @@ $('plan').onclick=async ()=>{
   }catch(e){ if(my===planSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 };
+
+// ---- best-trips: no pin needed, the model finds where + when ----
+let lastBest=null;
+async function runBestTrips(){
+  const my=++planSeq;
+  $('plan').disabled=true; $('plan').textContent='Finding best trips…';
+  $('results').innerHTML='<div class="loading"><div class="spin"></div>Finding the most rewarding trips for your life list… (this one takes a moment)</div>';
+  const targets=state.targets.map(t=>t.code);
+  const body={ n_days:+$('ndays').value, hours_per_day:+$('kday').value, radius_km:+$('radius').value,
+    alpha:state.alpha, n_trips:3, states:state.searchStates, life_list:state.lifeList,
+    targets:(targets.length?targets:null), exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
+  try{
+    const r=await getJSON('/best_trips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(my!==planSeq) return; renderBestTrips(r);
+  }catch(e){ if(my===planSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
+  finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
+}
+function renderBestTrips(r){
+  lastBest=r; const trips=r.trips||[];
+  $('birdfindwrap').style.display='none';
+  if(!trips.length){ $('results').innerHTML='<div class="hint">No trips found — try a wider region (or no region), more days, or a larger radius.</div>';
+    $('itinstatus').textContent='No trips found.'; return; }
+  const medals=['🥇','🥈','🥉'];
+  $('itinstatus').textContent=`Best ${trips.length} trip${trips.length>1?'s':''} found — no pin needed.`;
+  $('results').innerHTML = `<div class="hint" style="margin-bottom:8px">Your most rewarding ${r.n_days}-day trips${state.searchStates?'':' (anywhere)'} — click one for the day-by-day plan:</div>`
+    + trips.map((t,i)=>`<div class="trip" data-i="${i}" style="cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:9px 11px;margin-bottom:7px">
+        <div style="font-size:14px"><b>${medals[i]||('#'+(i+1))} ${t.region||'—'}</b> · ${t.month} (week ${t.week})</div>
+        <div class="meta"><b>${t.expected_lifers_total}</b> expected new lifers · ${t.n_stops} stop${t.n_stops>1?'s':''} · ${t.n_hotspots_in_range} hotspots in range</div>
+      </div>`).join('');
+  document.querySelectorAll('.trip').forEach(el=> el.onclick=()=>loadTrip(trips[+el.dataset.i]));
+}
+function loadTrip(t){
+  setBase(L.latLng(t.base_lat, t.base_lon)); map.setView([t.base_lat, t.base_lon], 9);
+  $('startdate').value=t.start_date; $('autowindow').checked=false; $('startdate').disabled=false;
+  renderItinerary(t.plan, true);
+  $('results').insertAdjacentHTML('afterbegin',
+    `<a href="#" class="ebird" onclick="event.preventDefault();renderBestTrips(lastBest)" style="display:inline-block;margin-bottom:6px">← back to best trips</a>`);
+}
 
 function windowCurveHTML(curve, chosen){
   if(!curve||!curve.length) return '';
