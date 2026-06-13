@@ -29,3 +29,5 @@ data/*
 *.sqlite
 *.parquet
 duckdb_tmp/
+ebd_*.txt          # raw EBD text dumps at any path (huge; eBird ToU forbids redistribution)
+.tmp/
