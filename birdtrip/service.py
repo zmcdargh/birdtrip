@@ -745,7 +745,7 @@ def plan_itinerary_window(store: Store, base_lat, base_lon, radius_km, n_days,
 
 def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_list=(), targets=None,
                     states=None, week=None, n_trips=3, grid_deg=0.9, shortlist=20, radius_km=75.0,
-                    exclude_restricted=False, user_restricted=None, ref_year=2026) -> dict:
+                    max_sites=80, exclude_restricted=False, user_restricted=None, ref_year=2026) -> dict:
     """Pick-a-place (and optionally pick-a-time): with no pin given, find the most rewarding trips.
     Two-stage funnel: (1) grid hotspots into clusters; a CHEAP occupancy proxy per (cluster, week)
     = Σ_species max-over-the-cluster's-hotspots(occupancy) ['expected lifers present']; argmax the
@@ -784,18 +784,53 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
         return {"trips": [], "n_clusters": 0}
     best = prox.loc[prox.groupby(["gy", "gx"])["proxy"].idxmax()]          # best week per cluster
     best = best.merge(cen, on=["gy", "gx"]).sort_values("proxy", ascending=False).head(int(shortlist))
-    trips = []
+    has_lambda = _has_lambda(store); ur = set(user_restricted or [])
+    # build each finalist's candidate sites IN MEMORY (cached coords), then fetch ALL their cells in
+    # ONE scan and run the greedy per cluster in memory — no per-finalist parquet scans.
+    fin = []
+    all_locs, all_weeks = set(), set()
     for r in best.itertuples():
         d = date(ref_year, 1, 1) + timedelta(days=int((int(r.week) - 1) * 7.61))
-        plan = plan_itinerary(store, float(r.lat), float(r.lon), float(radius_km), d.isoformat(),
-                              int(n_days), hours_per_day=hours_per_day, alpha=alpha, life_list=life_list,
-                              targets=targets, exclude_restricted=exclude_restricted,
-                              user_restricted=user_restricted)
+        sites = _candidate_sites(store, pq, float(r.lat), float(r.lon), float(radius_km))
+        if exclude_restricted and not sites.empty:
+            sites = sites[~(sites["locality"].map(_itin._restricted) | sites["locality_id"].isin(ur))].reset_index(drop=True)
+        if sites.empty:
+            continue
+        wks = _itin.trip_weeks(d, int(n_days))
+        fin.append((r, d, sites, wks)); all_locs |= set(sites["locality_id"]); all_weeks |= set(int(w) for w in wks)
+    if not fin:
+        return {"trips": [], "n_clusters": int(len(best)), "n_days": int(n_days)}
+    cols = ["locality_id", "week", "species_code", "common_name", "occupancy", "detect_given_present", "w"] \
+        + (["lambda_hr"] if has_lambda else []) + (["taxon_order"] if "taxon_order" in _store_cols(store) else [])
+    if pq:
+        where = [f"locality_id IN {_inlist(list(all_locs))}",
+                 f"week IN ({','.join(str(w) for w in all_weeks)})", "trusted=1"]
+        if targets: where.append(f"species_code IN {_inlist(targets)}")
+        elif life_list: where.append(f"species_code NOT IN {_inlist(life_list)}")
+        cell_cache = _q(f"SELECT {', '.join(cols)} FROM '{pq}' WHERE {' AND '.join(where)}")
+    else:
+        cell_cache = _slice(store, 0.0, locality_ids=list(all_locs), weeks=list(all_weeks))
+        if not cell_cache.empty:
+            if targets: cell_cache = cell_cache[cell_cache["species_code"].isin(set(targets))]
+            elif life_list: cell_cache = cell_cache[~cell_cache["species_code"].isin(set(life_list))]
+            cell_cache = cell_cache[[c for c in cols if c in cell_cache.columns]].copy()
+    recal = _recal_map(store); kfb = max(1, int(round(hours_per_day)))
+    trips = []
+    for r, d, sites, wks in fin:
+        cw = cell_cache[cell_cache["locality_id"].isin(set(sites["locality_id"])) & cell_cache["week"].isin(wks)]
+        if len(sites) > max_sites and not cw.empty:     # richness prefilter in memory (by richness, not proximity)
+            rr = cw.assign(p=cw["occupancy"].astype(float) * _pdetect(cw, hours_per_day, kfb, has_lambda))
+            top = (rr.groupby(["locality_id", "week"])["p"].sum().groupby("locality_id").max()
+                     .sort_values(ascending=False).head(int(max_sites)).index)
+            sites = sites[sites["locality_id"].isin(set(top))].reset_index(drop=True)
+            cw = cw[cw["locality_id"].isin(set(top))]
+        plan = _itin.plan(cw, sites, d, int(n_days), hours_per_day=hours_per_day, alpha=alpha,
+                          has_lambda=has_lambda, user_restricted=ur, recal=recal)
         trips.append({"region": (None if pd.isna(r.state) else r.state),
                       "base_lat": round(float(r.lat), 4), "base_lon": round(float(r.lon), 4),
                       "week": int(r.week), "month": month_of_week(int(r.week)), "start_date": d.isoformat(),
                       "expected_lifers_total": plan.get("expected_lifers_total", 0.0),
-                      "n_stops": len(plan.get("stops", [])), "n_hotspots_in_range": plan.get("n_candidate_sites", 0),
+                      "n_stops": len(plan.get("stops", [])), "n_hotspots_in_range": int(len(sites)),
                       "plan": plan})
     trips.sort(key=lambda t: t["expected_lifers_total"], reverse=True)
     return {"trips": trips[:int(n_trips)], "n_clusters": int(len(best)), "n_days": int(n_days)}
