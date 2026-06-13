@@ -50,6 +50,22 @@ async def _timing(request: Request, call_next):
     return response
 
 
+@app.on_event("startup")
+def _warm_caches():
+    """Warm the hotspot-coordinate cache in the background so the first trip search isn't cold
+    (one ~7 GB read). Non-blocking: the app is ready immediately; warming finishes shortly after."""
+    import threading
+
+    def go():
+        try:
+            s = _store()
+            service._loc_coords(s, service._parquet(s))
+            log.info("coordinate cache warmed")
+        except Exception as e:                       # no store yet / still downloading — fine
+            log.info("cache warm skipped: %s", e)
+    threading.Thread(target=go, daemon=True).start()
+
+
 _tax: Taxonomy | None = None
 
 

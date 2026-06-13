@@ -1,8 +1,13 @@
-# birdtrip — production image. Serves the API + frontend over the precomputed SQLite store.
-# The raw EBD never goes in the image; build the store first (locally or in CI):
-#   python scripts/precompute_duckdb.py --ebd <ebd>.txt --out data/birdtrip.sqlite --current-year 2026
-# then build:  docker build -t birdtrip .   and run:  docker run -p 8000:8000 birdtrip
+# birdtrip — production image (API + frontend). The 7 GB store is NOT baked in: it lives on a
+# persistent volume and is fetched from object storage on first boot (see docker-entrypoint.sh /
+# DEPLOY.md). The raw EBD never goes near the image.
+#   docker build -t birdtrip .
+#   docker run -p 8080:8080 -e STORE_URL=... -e RECAL_URL=... -v birdtrip_data:/data birdtrip
 FROM python:3.11-slim
+
+# curl for the boot-time store download; no build toolchain needed (wheels only)
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY pyproject.toml README.md ./
@@ -10,10 +15,14 @@ COPY birdtrip ./birdtrip
 RUN pip install --no-cache-dir -e ".[api]"
 
 COPY frontend ./frontend
-# ship the prebuilt store + taxonomy (derived products only — no raw eBird data)
-COPY data/birdtrip.sqlite ./data/birdtrip.sqlite
-COPY data/taxonomy ./data/taxonomy
+COPY data/taxonomy ./data/taxonomy          # small published taxonomy (safe to ship)
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x docker-entrypoint.sh
 
-ENV BIRDTRIP_DB=/app/data/birdtrip.sqlite
-EXPOSE 8000
-CMD ["uvicorn", "birdtrip.api:app", "--host", "0.0.0.0", "--port", "8000"]
+# the store path; the parquet sidecar (/data/birdtrip.parquet) is what actually gets served.
+ENV BIRDTRIP_DB=/data/birdtrip.sqlite \
+    PORT=8080 \
+    BIRDTRIP_DUCK_MEM=3GB \
+    BIRDTRIP_DUCK_TMP=/data/duckdb_tmp
+EXPOSE 8080
+ENTRYPOINT ["./docker-entrypoint.sh"]

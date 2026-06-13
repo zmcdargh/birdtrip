@@ -29,9 +29,14 @@ def _parquet(store: Store):
 def _duck():
     global _DUCK
     if _DUCK is None:
-        import duckdb
+        import duckdb, os
         _DUCK = duckdb.connect()
-        _DUCK.execute("PRAGMA threads=4;")
+        _DUCK.execute(f"PRAGMA threads={int(os.environ.get('BIRDTRIP_DUCK_THREADS', '4'))};")
+        # cap RAM + give DuckDB a spill dir so a heavy GROUP BY (e.g. the best-trips proxy) can't
+        # OOM a small hosting box; both tunable via env for the deploy target.
+        _DUCK.execute(f"PRAGMA memory_limit='{os.environ.get('BIRDTRIP_DUCK_MEM', '3GB')}';")
+        if os.environ.get("BIRDTRIP_DUCK_TMP"):
+            _DUCK.execute(f"PRAGMA temp_directory='{os.environ['BIRDTRIP_DUCK_TMP']}';")
     return _DUCK
 
 

@@ -1,0 +1,43 @@
+# Fly.io config for birdtrip. `fly launch --no-deploy` will set `app` and `primary_region`.
+# The 7 GB store lives on the mounted volume at /data (fetched on boot via STORE_URL).
+app = "birdtrip"
+primary_region = "iad"          # set to the region nearest your users
+
+[build]
+
+[env]
+  BIRDTRIP_DB = "/data/birdtrip.sqlite"
+  PORT = "8080"
+  BIRDTRIP_DUCK_MEM = "3GB"      # keep below the VM memory so heavy queries spill, not OOM
+  BIRDTRIP_DUCK_TMP = "/data/duckdb_tmp"
+  BIRDTRIP_DUCK_THREADS = "2"
+
+# STORE_URL / RECAL_URL are secrets (signed object-storage URLs):
+#   fly secrets set STORE_URL="https://…/birdtrip.parquet" RECAL_URL="https://…/birdtrip.recal.json"
+
+[mounts]
+  source = "birdtrip_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"     # keep warm so the coordinate cache stays hot
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 8
+    hard_limit = 16
+
+# Health check hits a cheap endpoint (not the heavy search).
+[[http_service.checks]]
+  method = "GET"
+  path = "/healthz"
+  interval = "30s"
+  timeout = "5s"
+  grace_period = "120s"          # allow time for a cold store download on first boot
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "4096mb"

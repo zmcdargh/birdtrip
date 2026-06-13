@@ -15,7 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 viz = ["matplotlib>=3.7"]
-api = ["fastapi>=0.110", "uvicorn>=0.27", "duckdb>=0.10"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.27", "duckdb>=0.10", "python-multipart>=0.0.9"]
 dev = ["pytest>=7", "pyarrow>=14"]
 
 [tool.setuptools]
