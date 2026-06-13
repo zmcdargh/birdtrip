@@ -182,6 +182,19 @@ def test_itinerary_auto_window(client):
     assert 14 <= date_to_week(_parse_date(plan["start_date"])) <= 24         # spring-migration peak
 
 
+def test_best_trips(client):
+    # no pin, no date -> the model finds the best trips (region + week + plan), ranked
+    r = client.post("/best_trips", json={"n_days": 3, "n_trips": 2}).json()
+    assert r["trips"] and len(r["trips"]) >= 1
+    t = r["trips"][0]
+    assert t["expected_lifers_total"] > 0 and "plan" in t and 1 <= t["week"] <= 48
+    assert t["base_lat"] is not None and t["base_lon"] is not None
+    els = [x["expected_lifers_total"] for x in r["trips"]]
+    assert els == sorted(els, reverse=True)               # ranked best-first
+    # the returned plan's total matches the trip's headline number
+    assert abs(t["plan"]["expected_lifers_total"] - t["expected_lifers_total"]) < 1e-6
+
+
 def test_itinerary_out_of_range_base(client):
     # a base in the middle of the Pacific reaches nothing -> graceful empty plan
     body = {"base_lat": 0.0, "base_lon": -150.0, "radius_km": 50,

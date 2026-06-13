@@ -181,6 +181,29 @@ def itinerary(req: ItineraryReq):
     return service.plan_itinerary_window(_store(), **common)   # pick-a-time: best N-day window
 
 
+class BestTripsReq(BaseModel):
+    n_days: int = Field(..., ge=1, le=30, description="trip length in days")
+    hours_per_day: float = Field(4.0, gt=0, le=24)
+    radius_km: float = Field(75.0, gt=0, le=1000, description="day-trip radius from the auto-chosen base")
+    alpha: float = Field(0.0, ge=0)
+    week: int | None = Field(None, ge=1, le=48, description="fix the time of year; omit to also pick the best week per area")
+    states: list[str] | None = Field(None, description="restrict the search to these states; omit for nationwide")
+    n_trips: int = Field(3, ge=1, le=10, description="how many distinct trips to return")
+    life_list: list[str] = Field(default_factory=list)
+    targets: list[str] | None = None
+    exclude_restricted: bool = False
+    user_restricted: list[str] = Field(default_factory=list)
+
+
+@app.post("/best_trips")
+def best_trips(req: BestTripsReq):
+    return service.find_best_trips(
+        _store(), n_days=req.n_days, hours_per_day=req.hours_per_day, radius_km=req.radius_km,
+        alpha=req.alpha, week=req.week, states=req.states, n_trips=req.n_trips,
+        life_list=req.life_list, targets=req.targets,
+        exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted)
+
+
 class TargetsReq(BaseModel):
     names: list[str] = Field(default_factory=list, description="must-see birds (common or scientific)")
     states: list[str] | None = None

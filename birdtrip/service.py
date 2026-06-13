@@ -731,6 +731,64 @@ def plan_itinerary_window(store: Store, base_lat, base_lon, radius_km, n_days,
     return out
 
 
+def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_list=(), targets=None,
+                    states=None, week=None, n_trips=3, grid_deg=0.9, shortlist=20, radius_km=75.0,
+                    exclude_restricted=False, user_restricted=None, ref_year=2026) -> dict:
+    """Pick-a-place (and optionally pick-a-time): with no pin given, find the most rewarding trips.
+    Two-stage funnel: (1) grid hotspots into clusters; a CHEAP occupancy proxy per (cluster, week)
+    = Σ_species max-over-the-cluster's-hotspots(occupancy) ['expected lifers present']; argmax the
+    week per cluster so each area appears once; (2) run the full greedy plan only on the top
+    `shortlist` clusters at their best week, and return the top `n_trips` distinct trips.
+    If `week` is given, that week is used for every cluster instead of the argmax (pick-a-place at a
+    fixed time). KNOWN LIMITATION: a cluster that peaks in two different seasons is collapsed to one."""
+    from datetime import date, timedelta
+    pq = _parquet(store); life_list = list(life_list); targets = list(targets) if targets else None
+    g = float(grid_deg)
+    sp = (f"AND species_code IN {_inlist(targets)}" if targets
+          else f"AND species_code NOT IN {_inlist(life_list)}" if life_list else "")
+    stf = f"AND state IN {_inlist(states)}" if states else ""
+    wf = f"AND week={int(week)}" if week else ""
+    if pq:
+        prox = _q(f"""WITH c AS (
+            SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code, MAX(occupancy) mo
+            FROM '{pq}' WHERE trusted=1 AND latitude IS NOT NULL {sp} {stf} {wf} GROUP BY 1,2,3,4)
+          SELECT gy, gx, week, SUM(mo) proxy FROM c GROUP BY 1,2,3""")
+        cen = _q(f"""SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx,
+            AVG(latitude) lat, AVG(longitude) lon, any_value(state) state, COUNT(DISTINCT locality_id) nhot
+            FROM '{pq}' WHERE trusted=1 AND latitude IS NOT NULL {stf} GROUP BY 1,2""")
+    else:                                   # pandas fallback (synthetic / tiny SQLite store)
+        df = _slice(store, 0.0, states=([s for s in states] if states else None))
+        if df is None or df.empty:
+            return {"trips": [], "n_clusters": 0}
+        if targets: df = df[df["species_code"].isin(set(targets))]
+        elif life_list: df = df[~df["species_code"].isin(set(life_list))]
+        if week: df = df[df["week"] == int(week)]
+        df["gy"] = np.floor(df["latitude"] / g); df["gx"] = np.floor(df["longitude"] / g)
+        mo = df.groupby(["gy", "gx", "week", "species_code"])["occupancy"].max().reset_index()
+        prox = mo.groupby(["gy", "gx", "week"])["occupancy"].sum().reset_index().rename(columns={"occupancy": "proxy"})
+        cen = df.groupby(["gy", "gx"]).agg(lat=("latitude", "mean"), lon=("longitude", "mean"),
+                                           state=("state", "first"), nhot=("locality_id", "nunique")).reset_index()
+    if prox is None or len(prox) == 0:
+        return {"trips": [], "n_clusters": 0}
+    best = prox.loc[prox.groupby(["gy", "gx"])["proxy"].idxmax()]          # best week per cluster
+    best = best.merge(cen, on=["gy", "gx"]).sort_values("proxy", ascending=False).head(int(shortlist))
+    trips = []
+    for r in best.itertuples():
+        d = date(ref_year, 1, 1) + timedelta(days=int((int(r.week) - 1) * 7.61))
+        plan = plan_itinerary(store, float(r.lat), float(r.lon), float(radius_km), d.isoformat(),
+                              int(n_days), hours_per_day=hours_per_day, alpha=alpha, life_list=life_list,
+                              targets=targets, exclude_restricted=exclude_restricted,
+                              user_restricted=user_restricted)
+        trips.append({"region": (None if pd.isna(r.state) else r.state),
+                      "base_lat": round(float(r.lat), 4), "base_lon": round(float(r.lon), 4),
+                      "week": int(r.week), "month": month_of_week(int(r.week)), "start_date": d.isoformat(),
+                      "expected_lifers_total": plan.get("expected_lifers_total", 0.0),
+                      "n_stops": len(plan.get("stops", [])), "n_hotspots_in_range": plan.get("n_candidate_sites", 0),
+                      "plan": plan})
+    trips.sort(key=lambda t: t["expected_lifers_total"], reverse=True)
+    return {"trips": trips[:int(n_trips)], "n_clusters": int(len(best)), "n_days": int(n_days)}
+
+
 def regions(store: Store, level="state") -> list[dict]:
     """Region selectors (name + centroid + counts), cached. Uses Parquet+DuckDB when present."""
     key = (store.db_path, level)
