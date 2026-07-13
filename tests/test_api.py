@@ -220,3 +220,26 @@ def test_lifelist_upload(client, tmp_path):
     assert r.status_code == 200
     assert "norcar" in body["species_codes"] and body["n_species"] == 1
     assert any(cat == "spuh" for _, cat in body["dropped"])
+
+
+def test_ask_disabled_without_key(client, monkeypatch):
+    # no LLM key -> feature flag off and /ask returns 503 (never 500)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
+    assert client.get("/config").json()["ask_enabled"] is False
+    assert client.post("/ask", json={"query": "warblers near Denver in May"}).status_code == 503
+
+
+def test_ask_configure_parsing():
+    # parse/normalize logic with a STUBBED llm (no network, no geocode) + real taxonomy
+    from birdtrip.taxonomy import Taxonomy
+    from birdtrip import ask
+    stub = lambda q: {"mode": "best_trips", "states": ["New York"], "month": "May",
+                      "target_birds": ["Northern Cardinal", "Glorptl Sparrow"], "alpha": 1.5, "n_days": 4}
+    cfg = ask.configure("anything", Taxonomy(), llm=stub)
+    assert cfg["mode"] == "best_trips" and cfg["states"] == ["New York"]
+    assert cfg["month"] == 5 and cfg["week"] == 18          # mid-May eBird week
+    assert "norcar" in cfg["targets"] and "Glorptl Sparrow" in cfg["unresolved_birds"]
+    assert cfg["alpha"] == 1.5 and cfg["n_days"] == 4
+    # plan_trip with no resolvable place falls back to best_trips (no geocode call needed)
+    cfg2 = ask.configure("x", Taxonomy(), llm=lambda q: {"mode": "plan_trip"})
+    assert cfg2["mode"] == "best_trips"

@@ -27,6 +27,8 @@ from .store import Store
 from .taxonomy import Taxonomy
 from .lifelist import parse_life_list
 from . import service
+from . import ask as ask_mod
+import collections
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -220,6 +222,56 @@ def best_trips(req: BestTripsReq):
         alpha=req.alpha, week=req.week, states=req.states, n_trips=req.n_trips, min_sep_km=req.min_sep_km,
         life_list=req.life_list, targets=req.targets,
         exclude_restricted=req.exclude_restricted, user_restricted=req.user_restricted)
+
+
+# ---- optional natural-language interface (LLM fills the search form) ----------------------
+# Cost guards: the LLM key lives ONLY server-side (never sent to the client); requests are rate
+# limited per-IP and capped globally per day so the endpoint can't be hammered into a big bill.
+_ask_ip: dict = collections.defaultdict(list)
+_ask_day = {"day": None, "n": 0}
+
+
+def _ask_ratelimit(ip: str):
+    now = time.time(); today = time.strftime("%Y-%m-%d")
+    if _ask_day["day"] != today:
+        _ask_day.update(day=today, n=0)
+    per_min = int(os.environ.get("ASK_RATE_PER_MIN", "6"))
+    per_day_ip = int(os.environ.get("ASK_RATE_PER_DAY", "60"))
+    glob = int(os.environ.get("ASK_GLOBAL_DAILY", "1500"))
+    if _ask_day["n"] >= glob:
+        raise HTTPException(429, "daily query budget reached — please try again tomorrow")
+    hits = [t for t in _ask_ip[ip] if now - t < 86400]
+    if sum(1 for t in hits if now - t < 60) >= per_min:
+        raise HTTPException(429, "too many requests — please slow down")
+    if len(hits) >= per_day_ip:
+        raise HTTPException(429, "daily limit reached for this address")
+    hits.append(now); _ask_ip[ip] = hits; _ask_day["n"] += 1
+
+
+@app.get("/config")
+def config():
+    """Feature flags for the frontend (so the NL box only shows when the LLM is configured)."""
+    return {"ask_enabled": ask_mod.ask_enabled()}
+
+
+class AskReq(BaseModel):
+    query: str = Field(..., min_length=1, max_length=1000, description="natural-language trip request")
+    life_list: list[str] = Field(default_factory=list)
+
+
+@app.post("/ask")
+def ask(req: AskReq, request: Request):
+    """Parse a free-text request into a search config the frontend applies to the form."""
+    if not ask_mod.ask_enabled():
+        raise HTTPException(503, "natural-language search is not enabled on this server")
+    _ask_ratelimit(request.client.host if request.client else "unknown")
+    try:
+        return ask_mod.configure(req.query, _taxonomy(), req.life_list)
+    except ask_mod.AskError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:                              # never leak internals (incl. the key)
+        log.warning("ask failed: %s", type(e).__name__)
+        raise HTTPException(502, "language model unavailable")
 
 
 class TargetsReq(BaseModel):
