@@ -85,6 +85,16 @@
       to find new species, or name target birds to chase specific ones. Every filter is optional —
       set what you care about and hit Go.</p>
 
+    <div id="askwrap" class="ctl" style="display:none">
+      <label>Ask in plain English</label>
+      <div style="display:flex;gap:6px">
+        <input id="askq" type="text" placeholder="e.g. warblers within 3 hours of Denver in May"
+          style="flex:1;font-size:12px;padding:6px;border:1px solid var(--line);border-radius:4px"/>
+        <button id="askgo" type="button">Ask</button>
+      </div>
+      <div id="askstatus" class="hint" style="margin-top:4px"></div>
+    </div>
+
     <div class="ctl tabs">
       <button class="tab on" id="tabSearch" type="button">Find spots</button>
       <button class="tab" id="tabItin" type="button">Plan a trip</button>
@@ -503,6 +513,50 @@ function setMode(m){
 }
 $('tabSearch').onclick=()=>setMode('search');
 $('tabItin').onclick=()=>setMode('itinerary');
+
+// ---- optional natural-language box: the LLM fills the search, we run it + render normally ----
+fetch('/config').then(r=>r.json()).then(c=>{ if(c && c.ask_enabled) $('askwrap').style.display=''; }).catch(()=>{});
+function askWk2date(w){ const d=new Date(2026,0,1); d.setDate(d.getDate()+Math.round((w-1)*7.61)); return d.toISOString().slice(0,10); }
+async function runAsk(){
+  const q=$('askq').value.trim(); if(!q) return;
+  $('askgo').disabled=true; $('askstatus').textContent='Thinking…';
+  try{ await applyAsk(await getJSON('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q, life_list:state.lifeList})})); }
+  catch(e){ $('askstatus').textContent='⚠ '+e.message; }
+  finally{ $('askgo').disabled=false; }
+}
+$('askgo').onclick=runAsk;
+$('askq').addEventListener('keydown',e=>{ if(e.key==='Enter') runAsk(); });
+async function applyAsk(cfg){
+  const notes=[]; if(cfg.note) notes.push(cfg.note);
+  if(cfg.unresolved_birds && cfg.unresolved_birds.length) notes.push("couldn't match: "+cfg.unresolved_birds.join(', '));
+  $('askstatus').textContent = notes.join(' · ') || 'Done.';
+  const t=(cfg.targets||[]); const ur=[...userRestricted];
+  if(cfg.alpha!=null){ state.alpha=+cfg.alpha; $('alpha').value=cfg.alpha; $('aval').textContent=(+cfg.alpha).toFixed(1); }
+  if(cfg.n_days!=null){ $('ndays').value=cfg.n_days; $('dayval').textContent=cfg.n_days+(cfg.n_days==1?' day':' days'); }
+  if(cfg.hours_per_day!=null){ $('kday').value=cfg.hours_per_day; $('effval').textContent=cfg.hours_per_day+' h'; }
+  if(cfg.radius_km!=null){ $('radius').value=cfg.radius_km; $('radval').textContent=cfg.radius_km+' km'; if(baseCircle) baseCircle.setRadius(cfg.radius_km*1000); }
+  const loading=m=>$('results').innerHTML='<div class="loading"><div class="spin"></div>'+m+'</div>';
+  if(cfg.mode==='find_spots'){
+    setMode('search'); loading('Finding spots…');
+    const body={ life_list:state.lifeList, targets:t.length?t:null, states:cfg.states||null, weeks:cfg.week?[cfg.week]:null,
+      k:1, hours:1, alpha:cfg.alpha??0, topn:12, exclude_restricted:false, user_restricted:ur };
+    renderResults(await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+  } else if(cfg.mode==='plan_trip'){
+    setMode('itinerary'); setBase(L.latLng(cfg.base_lat,cfg.base_lon)); map.setView([cfg.base_lat,cfg.base_lon],8); loading('Planning…');
+    const body={ base_lat:cfg.base_lat, base_lon:cfg.base_lon, radius_km:cfg.radius_km||+$('radius').value,
+      n_days:cfg.n_days||+$('ndays').value, hours_per_day:cfg.hours_per_day||+$('kday').value, alpha:cfg.alpha??0,
+      life_list:state.lifeList, targets:t.length?t:null, exclude_restricted:false, user_restricted:ur };
+    if(!cfg.auto_time && cfg.week){ body.start_date=askWk2date(cfg.week); $('startdate').value=body.start_date; $('autowindow').checked=false; $('startdate').disabled=false; }
+    else { $('autowindow').checked=true; $('startdate').disabled=true; }
+    renderItinerary(await getJSON('/itinerary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+  } else {
+    setMode('itinerary'); loading('Finding the best trips…');
+    const body={ n_days:cfg.n_days||+$('ndays').value, hours_per_day:cfg.hours_per_day||+$('kday').value, radius_km:+$('radius').value,
+      alpha:cfg.alpha??0, n_trips:3, week:cfg.week||null, states:cfg.states||null,
+      life_list:state.lifeList, targets:t.length?t:null, exclude_restricted:false, user_restricted:ur };
+    renderBestTrips(await getJSON('/best_trips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
+  }
+}
 
 const radiusM=()=>(+$('radius').value)*1000;
 $('radius').oninput=e=>{ $('radval').textContent=e.target.value+' km'; if(baseCircle) baseCircle.setRadius(radiusM()); };

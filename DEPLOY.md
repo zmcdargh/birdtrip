@@ -72,6 +72,25 @@ Rebuild locally, re-upload to object storage, then `fly ssh console -C "rm /data
 and restart (it re-downloads), or `fly volume` swap. Always regenerate the recal map alongside the
 store (it must be fit on the same shrunk product — see `MODEL.md` §6).
 
+## Optional: natural-language search (`/ask`)
+
+Off by default. When an LLM key is set, an "Ask in plain English" box appears (the frontend checks
+`/config`); the model only fills the search form — it never touches data.
+
+```bash
+fly secrets set LLM_API_KEY="sk-…"          # DeepSeek by default (cheap, tool-calling)
+# optional provider override (any OpenAI-compatible endpoint):
+#   fly secrets set LLM_BASE_URL="https://api.deepseek.com" LLM_MODEL="deepseek-chat"
+```
+
+**Key safety (important):** the key is read only server-side inside `/ask`, never returned to the
+browser, never logged, never baked into the image or repo — set it *only* as a Fly secret. `/ask`
+is rate-limited per-IP (`ASK_RATE_PER_MIN`=6, `ASK_RATE_PER_DAY`=60) and globally
+(`ASK_GLOBAL_DAILY`=1500/day) with a 1000-char input cap, so it can't be hammered into a big bill.
+As belt-and-suspenders, **also set a hard spend limit on the DeepSeek account**. Geocoding uses
+Nominatim (set `NOMINATIM_URL` to self-host if you expect real volume — the public server is
+rate-limited).
+
 ## Render alternative
 
 Create a **Web Service from this repo** (Docker), add a **Persistent Disk** mounted at `/data`
