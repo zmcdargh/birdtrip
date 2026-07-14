@@ -38,42 +38,6 @@ def _grid_proxy_paths(store: Store):
     return (g if os.path.exists(g) else None, c if os.path.exists(c) else None)
 
 
-_GRID_DEG = 0.9   # grid resolution of the proxy sidecars (must match make_grid_proxy.py / precompute)
-
-
-def _grid_shortlist_localities(store, pq, life_list=(), targets=None, weeks=None,
-                               max_cells=50, max_hotspots=600):
-    """For a location-agnostic recommend, use the precomputed grid proxy to pick the richest
-    regions (cheap read of a small sidecar), then map them — in memory, via the cached coord
-    table — to the hotspots to score. Returns (locality_ids, states) so the exact per-hotspot scan
-    runs on a small, state-pruned subset instead of the whole country. Returns None if the proxy
-    sidecar isn't present, so the caller falls back to the full scan.
-    Blind spot (same as best_trips): a standout hotspot in a region that didn't make the proxy cut
-    is missed — but the proxy tracks regional richness, so the top hotspots live in the top cells."""
-    gpq, _ = _grid_proxy_paths(store)
-    if not gpq:
-        return None
-    sp = (f"AND species_code IN {_inlist(targets)}" if targets
-          else f"AND species_code NOT IN {_inlist(list(life_list))}" if life_list else "")
-    wf = f"AND week IN ({','.join(str(int(w)) for w in weeks)})" if weeks else ""
-    prox = _q(f"""SELECT gy, gx, MAX(s) proxy FROM (
-        SELECT gy, gx, week, SUM(mo) s FROM '{gpq}' WHERE TRUE {sp} {wf} GROUP BY 1,2,3
-    ) GROUP BY gy, gx ORDER BY proxy DESC LIMIT {int(max_cells)}""")
-    if prox.empty:
-        return None
-    coords = _loc_coords(store, pq)
-    if coords.empty:
-        return None
-    cg = coords.dropna(subset=["latitude", "longitude"]).copy()
-    cg["gy"] = np.floor(cg["latitude"] / _GRID_DEG)
-    cg["gx"] = np.floor(cg["longitude"] / _GRID_DEG)
-    # hotspots in the top cells, richest cell first; cap the total so the exact scan stays cheap.
-    sel = cg.merge(prox, on=["gy", "gx"], how="inner").sort_values("proxy", ascending=False).head(int(max_hotspots))
-    if sel.empty:
-        return None
-    return (sel["locality_id"].tolist(), sorted(sel["state"].dropna().unique().tolist()))
-
-
 def _duck():
     global _DUCK
     if _DUCK is None:
@@ -368,8 +332,6 @@ def warm(store: Store) -> None:
     (the Parquet path uses precomputed weights and queries columnar data directly)."""
     if _parquet(store):
         regions(store, "state")    # fast DuckDB GROUP BY; also primes the Parquet read
-        _loc_coords(store, _parquet(store))   # build the coord table once so the first itinerary /
-                                              # best_trips / location-agnostic recommend isn't cold
         return
     weights(store)
     regions(store, "state")
@@ -445,17 +407,9 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
         hours = float(k)
     pq = _parquet(store)
     if pq:   # scalable path: score in DuckDB over Parquet, fetch details for top hotspots only
-        eff_states = states or ([state] if state else None)
-        cand_ids = None
-        if eff_states is None:   # location-agnostic: shortlist the richest regions via the grid
-            sl = _grid_shortlist_localities(store, pq, list(life_list), targets, weeks)   # proxy funnel
-            if sl is not None:
-                cand_ids, eff_states = sl
-                if not cand_ids:
-                    return []
-        return _recommend_via_parquet(store, pq, list(life_list), eff_states,
+        return _recommend_via_parquet(store, pq, list(life_list), states or ([state] if state else None),
                                       weeks, k, alpha, occ_gate, topn, targets, hours, has_lambda,
-                                      exclude_restricted, ur, cand_locality_ids=cand_ids)
+                                      exclude_restricted, ur)
 
     region = _slice(store, occ_gate, states=states, state=state, county=county, weeks=weeks)
     if region.empty:
@@ -535,15 +489,12 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
 
 
 def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_gate, topn, targets=None,
-                           hours=None, has_lambda=False, exclude_restricted=False, user_restricted=None,
-                           cand_locality_ids=None):
+                           hours=None, has_lambda=False, exclude_restricted=False, user_restricted=None):
     if hours is None:
         hours = float(k)
     ur = set(user_restricted or [])
-    # cand_locality_ids restricts the stage-1 candidate pool (used by the location-agnostic grid
-    # funnel, which pre-selects the richest regions' hotspots); None = score the whole region.
     cs = _cell_scores(pq, alpha, k, states=states, weeks=weeks, life_list=life_list, targets=targets,
-                      hours=hours, has_lambda=has_lambda, locality_ids=cand_locality_ids)
+                      hours=hours, has_lambda=has_lambda)
     if cs.empty:
         return []
     # take a buffer beyond topn so excluding restricted hotspots still leaves a full list
