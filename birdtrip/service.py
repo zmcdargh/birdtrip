@@ -851,15 +851,13 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
     stf = f"AND state IN {_inlist(states)}" if states else ""
     wf = f"AND week={int(week)}" if week else ""
     gpq, cpq = _grid_proxy_paths(store)
-    if pq and gpq and cpq:
-        # FAST path: the per-(cell,week,species) max-occupancy proxy was precomputed offline, so we
-        # read a few-MB sidecar instead of scanning the full store. Filtering species AFTER the
-        # per-species MAX is identical to filtering before it. A state selection (incl. "Lower 48")
-        # restricts by cell centroid via the centroids sidecar — the inner merge below drops any
-        # cell whose state isn't selected, so we still avoid the full scan.
+    if pq and gpq and cpq and not states:
+        # FAST location-agnostic path: the per-(cell,week,species) max-occupancy proxy was
+        # precomputed offline, so we read a few-MB sidecar instead of scanning the full store.
+        # Filtering species AFTER the per-species MAX is identical to filtering before it, so this
+        # matches the live scan exactly. State-filtered searches still use the live (pruned) path.
         prox = _q(f"SELECT gy, gx, week, SUM(mo) proxy FROM '{gpq}' WHERE TRUE {sp} {wf} GROUP BY 1,2,3")
-        cen = _q(f"SELECT gy, gx, lat, lon, state, nhot FROM '{cpq}'"
-                 + (f" WHERE state IN {_inlist(states)}" if states else ""))
+        cen = _q(f"SELECT gy, gx, lat, lon, state, nhot FROM '{cpq}'")
     elif pq:
         prox = _q(f"""WITH c AS (
             SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code, MAX(occupancy) mo
