@@ -34,9 +34,19 @@ def main():
     grid, cen = base + ".grid.parquet", base + ".gridcen.parquet"
     g = float(a.grid_deg)
     con = duckdb.connect()
-    print(f"building grid proxy (grid_deg={g}) from {store} …", flush=True)
+    cols = {r[0] for r in con.execute(f"DESCRIBE SELECT * FROM '{store}'").fetchall()}
+    # Pool each grid cell into one "super-hotspot": mo = observation-weighted MEAN occupancy per
+    # species (weight = n_checklists where available, else unweighted). Robust to hotspot count and
+    # estimation noise, unlike MAX. SUM(mo) over species at serve time = expected species present
+    # at a typical site in the cell. (Weighting needs n_checklists, which the FULL store has; the
+    # slim serve store dropped it, so build the sidecars from the full store to get weighting.)
+    wt = "n_checklists" if "n_checklists" in cols else "1"
+    if wt == "1":
+        print("  note: n_checklists absent — using an UNWEIGHTED mean (build from the full store to weight)", flush=True)
+    print(f"building grid proxy (grid_deg={g}, weight={wt}) from {store} …", flush=True)
     con.execute(f"""COPY (
-        SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code, MAX(occupancy) mo
+        SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code,
+               SUM(occupancy * {wt}) / NULLIF(SUM({wt}), 0) mo
         FROM '{store}'
         WHERE trusted=1 AND latitude IS NOT NULL AND species_code IS NOT NULL
         GROUP BY 1, 2, 3, 4
