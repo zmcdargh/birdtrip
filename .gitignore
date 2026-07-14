@@ -33,3 +33,6 @@ duckdb_tmp/
 # raw EBD text dumps at any path (huge; eBird ToU forbids redistribution)
 ebd_*.txt
 *_relApr-*.txt
+
+# stray per-run diagnostic tables dumped at repo root (regenerable; keep repo clean)
+eb_shrinkage_*.csv
