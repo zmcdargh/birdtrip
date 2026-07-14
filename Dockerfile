@@ -15,7 +15,8 @@ COPY birdtrip ./birdtrip
 RUN pip install --no-cache-dir -e ".[api]"
 
 COPY frontend ./frontend
-COPY data/taxonomy ./data/taxonomy          # small published taxonomy (safe to ship)
+# small published taxonomy (safe to ship)
+COPY data/taxonomy ./data/taxonomy
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 RUN chmod +x docker-entrypoint.sh
 

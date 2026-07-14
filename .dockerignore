@@ -1,0 +1,39 @@
+# Keep the Docker build context tiny. The image needs only: pyproject.toml, README.md,
+# birdtrip/, frontend/, data/taxonomy/, docker-entrypoint.sh. Everything else is excluded so
+# `fly deploy` doesn't upload the multi-hundred-GB data dir / raw EBD to the builder.
+
+# version control & scratch
+.git
+.gitignore
+.tmp/
+__pycache__/
+*.pyc
+
+# huge data + raw EBD — never in the image (the store is fetched from object storage on boot)
+data/*
+!data/taxonomy
+*.txt
+*.parquet
+*.sqlite
+*.gz
+*.tar
+*.zip
+
+# local installers, secrets, upload helpers
+AWSCLIV2.pkg
+*.pkg
+upload.sh
+*.env
+.env
+
+# research artifacts / figures / vendored skills — not part of the app
+figures/
+viz/
+skills/
+*.png
+
+# dev-only (not copied into the image anyway)
+tests/
+scripts/
+*.md
+!README.md

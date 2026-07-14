@@ -12,6 +12,16 @@ dist/
 MyEBirdData.csv
 *MyEBirdData*
 
+# Secrets — never commit (AWS/Tigris keys, upload helpers, env files)
+upload.sh
+*.env
+.env
+*secret*
+*credentials*
+
+# local installers / downloaded binaries (regenerable junk)
+*.pkg
+
 # Raw eBird data and large generated stores.
 # Reasons: (1) eBird's Terms of Use forbid redistributing the raw dataset, and
 # (2) these are huge / regenerable. Ignore everything under data/ EXCEPT the small,
