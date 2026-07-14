@@ -1,86 +1,141 @@
 # birdtrip
 
-Plan birding trips from eBird data: given your life list and a region/season, find **where and when** to go to maximize your expected number of new species (lifers) — with rare/endemic specialties pulled in via a tunable rarity slider.
+Plan birding trips from eBird data: given your life list and a region/season, find **where and
+when** to go to maximize your expected number of new species (lifers) — with rare/local
+specialties pulled in via a tunable rarity slider.
+
+It answers three shapes of question over the full US eBird Basic Dataset:
+
+- **Where should I go?** — rank hotspots in a region/season by expected lifers.
+- **When should I go?** — omit the date and it sweeps the calendar for your best multi-day window.
+- **Where's the best trip *anywhere*?** — omit the location and it searches the country for the
+  top few distinct multi-day trips.
 
 ## How it works
 
-The atom is a **detection probability** estimated from eBird complete checklists: the chance of seeing a species on one checklist at a given place in a given week of the year. Trips are scored by summing, over species *not* on your life list, the probability of finding each.
+The atom is a **detection probability** estimated from eBird complete checklists: the chance of
+detecting a species on a visit of *t* hours at a given place in a given week of the year. It's
+decomposed into two independent questions, estimated separately and then multiplied:
 
-Two estimation ideas keep it honest:
+```
+P(detect on a visit) = ψ        ×   (1 − e^(−λ·t))
+                       ╰─ is it ╯     ╰─ if present, how fast ╯
+                          there?         do you detect it?
+```
 
-- **Inter-year occupancy** separates "present in a typical year" from "detectable given present", so a single over-wintering vagrant (high pooled frequency, but seen in only one year) doesn't get recommended as if it were reliable.
-- **Shrinkage** (Beta-Binomial, pooled toward the parent region) tames cells built on very few checklists, where a raw "1 of 1 = 100%" frequency would otherwise mislead. Real eBird data is dominated by such sparse cells.
+- **ψ — occupancy** (is the species present that site/week in a typical year). Estimated with
+  **empirical-Bayes shrinkage** (κ = 3) toward a regional prior, so a single over-wintering
+  vagrant seen in one surveyed year doesn't get recommended as if it were reliable — while a
+  genuinely recurring bird stays high.
+- **λ — detection rate** per hour, given present (a time-to-detection rate). This is where
+  **effort** (hours) enters, and it cleanly separates skulkers (λ ≈ 0.1/h) from conspicuous birds
+  (λ ≈ 1/h), roughly orthogonally to rarity.
 
-The **rarity slider** (`alpha`) trades "most birds" against "most specialties". A species' irreplaceability weight is its attainability inside your region versus the rest of the world — gated on reliable presence so vagrants can't masquerade as specialties.
+The **product** is then **recalibrated** with a monotone (isotonic) map fit on a held-out block,
+so the displayed probability means what it says. Trips are scored by summing this probability over
+species *not* on your life list.
+
+A separate **rarity slider** (`alpha`) trades "most birds" against "most specialties" in the
+*ranking*: a species' weight is its attainability inside your region versus the rest of the world,
+gated on reliable presence so vagrants can't masquerade as specialties. It affects ordering, not
+the calibrated probability.
+
+The model and the held-out validation (calibration, detectability, range maps) are written up in
+**[MODEL.md](MODEL.md)**.
 
 ## Package layout
 
 ```
-birdtrip/                core library (installable)
-  taxonomy.py            name <-> species_code; resolve any taxon to its countable species
-  lifelist.py            parse an eBird "Download My Data" export into a species-code life list
-  precompute.py          EBD + Sampling Event Data -> per-(species, place, week) table
-  recommend.py           rank destinations by rarity-weighted expected lifers
-  summary.py             human-readable trip summary: expected lifers + likely birds
-scripts/                 dev tools (not part of the library)
-  generate_sample.py     write a synthetic EBD/SED pair for testing
-  make_viz.py            Tufte-style charts of the precompute
-tests/                   pytest suite
+birdtrip/                    core library (installable)
+  taxonomy.py                name <-> species_code; resolve any taxon to its countable species
+  lifelist.py                parse an eBird "Download My Data" export into a life list
+  precompute.py              EBD -> per-(species, place, week) table (small-scale / reference)
+  recommend.py               rank destinations by rarity-weighted expected lifers
+  summary.py                 human-readable trip summary: expected lifers + likely birds
+  itinerary.py               multi-day greedy planner (base camp + radius, over a soft life list)
+  service.py                 query the store + run the recommend / itinerary / best-trips math
+  store.py                   storage layer (DuckDB-over-Parquet at scale; SQLite for small data)
+  api.py                     FastAPI app + endpoints; serves the frontend
+  ask.py                     optional natural-language "fill the form" interface (off by default)
+scripts/                     dev / data-pipeline tools (not part of the library)
+  precompute_duckdb.py       build the full-US store (EBD -> Parquet) with EB κ=3 occupancy
+  validate_holdout.py        temporal hold-out trials for calibration
+  kappa_sweep.py             tune κ + fit the isotonic recalibration map on the shrunk product
+  make_viz.py, range_maps*.py, lambda_*.py, ...   validation & range-map figures
+frontend/index.html          single-file Leaflet + vanilla-JS UI (no build step)
+tests/                       pytest suite
 data/
-  taxonomy/              eBird taxonomy + Clements checklist
-  real/                  real EBD samples (e.g. the auk zerofill example)
-  sample/                generated synthetic EBD/SED
+  taxonomy/                  eBird taxonomy + Clements checklist (published reference data)
+  precomputed.csv            small synthetic sample used by the tests
 ```
 
 ## Quickstart
 
 ```bash
-pip install -e .            # core
-pip install -e ".[viz,dev]" # + charts + tests
-pytest                      # run tests
+pip install -e ".[api,viz,dev]"     # library + API + charts + tests
+pytest                              # run the suite
 
-# build the per-(species, place, week) table from an EBD + sampling file
-python -m birdtrip.precompute --ebd data/real/zerofill-ex_ebd.txt \
-    --sed data/real/zerofill-ex_sampling.txt --current-year 2012 --out data/precomputed_real.csv
+# serve the small bundled sample (no EBD needed) and open the UI:
+python -m birdtrip.store --precomputed data/precomputed.csv --db data/birdtrip.sqlite
+uvicorn birdtrip.api:app --reload   # http://127.0.0.1:8000  (API docs at /docs)
 ```
 
-```python
-from birdtrip import Taxonomy, parse_life_list
-tax = Taxonomy()
-result = parse_life_list("MyEBirdData.csv", tax)   # your eBird export
-print(result.summary())                            # species, dropped non-species taxa, unmatched
-```
+Open the root URL for the **frontend**: a Leaflet map with one marker per region that has data.
+Pick a spot, set season / effort / the rarity slider, optionally upload your eBird life-list CSV,
+and it pins the top hotspots with the expected lifers and the birds driving each. (Map tiles load
+from a CDN, so the UI needs internet at runtime.)
 
-## Backend (storage + API)
+### Building the full-US store
 
-The precomputed table is persisted in **SQLite** (`birdtrip/store.py`) and served by a
-**FastAPI** app (`birdtrip/api.py`); a service layer (`birdtrip/service.py`) runs the
-recommendation math over queried region/season slices. The store query methods return
-DataFrames, so swapping to DuckDB/Parquet or Postgres at full-EBD scale touches only `store.py`.
+The bundled sample is synthetic. For the real thing you need the [eBird Basic
+Dataset](https://ebird.org/data/download) (free, requires an approved request; not redistributable
+— see below). Then:
 
 ```bash
-pip install -e ".[api]"
-python -m birdtrip.store --precomputed data/precomputed.csv --db data/birdtrip.sqlite
-uvicorn birdtrip.api:app --reload          # open http://127.0.0.1:8000  (API docs at /docs)
+python scripts/precompute_duckdb.py --ebd data/ebd_US_relApr-2026.txt --current-year 2026 \
+    --out data/birdtrip.sqlite --memory-limit 24GB --threads 4
+python scripts/kappa_sweep.py --trials data/holdout_trials_NY --kappa-fig 3 \
+    --save-recal-map data/birdtrip.recal.json
 ```
 
-Opening the root URL serves the **frontend** (`frontend/index.html`): a single-file vanilla-JS +
-Leaflet map. The map drops one clickable marker per region that has data (at the centroid of its
-hotspots); pick a region, set season/effort/the rarity slider, optionally upload your eBird life-list
-CSV, and the planner pins the top recommended hotspots and lists each with its expected lifers and the
-birds driving it. No build step — FastAPI serves it. (Map tiles/Leaflet load from a CDN, so the UI
-needs internet at runtime even though everything else is local.)
+This writes `data/birdtrip.parquet` (the file the server actually queries) and the recal map.
 
-Endpoints: `GET /regions` (selectable regions) · `POST /lifelist` (upload eBird CSV →
-species codes) · `POST /recommend` (region + season + effort + α → ranked destinations with
-the birds driving each) · `POST /summary` (one destination → expected lifers + likely birds).
+## API
 
-Note: SQLite needs a normal local filesystem; some network/fuse mounts reject its file locking.
+`GET /regions` · `POST /lifelist` (eBird CSV → species codes) · `POST /recommend` (region +
+season + effort + α → ranked destinations) · `POST /summary` (one destination → expected lifers +
+likely birds) · `POST /itinerary` (multi-day plan; omit the start date for best-window search) ·
+`POST /best_trips` (top-N distinct trips anywhere) · `GET /config` + `POST /ask` (optional NL
+interface — see below).
+
+## Optional: natural-language search
+
+If an LLM key is configured, an "Ask in plain English" box appears and the model simply **fills
+the search form** ("warblers near the Hudson Valley in May") — it never touches the data. It's
+**off by default**; enabling it and the key-safety/rate-limit setup are covered in
+**[DEPLOY.md](DEPLOY.md)**.
+
+## Deploying
+
+The app is a read-only FastAPI service + static frontend backed by the Parquet store. Recommended
+host is Fly.io with a persistent volume and the store fetched from object storage on first boot.
+Full steps in **[DEPLOY.md](DEPLOY.md)**.
 
 ## Status
 
-Estimation machinery, recommender, summary, taxonomy and life-list parsing are built and tested, validated on real eBird-format data. Parameter **calibration** (min-checklist thresholds, shrinkage strength, occupancy gate) awaits a multi-year regional EBD extract.
+The estimation pipeline (EB occupancy, per-hour λ, recalibration), the recommender, the multi-day
+itinerary planner, best-window / best-trips search, taxonomy + life-list parsing, and the frontend
+are built and tested, with held-out calibration on real US eBird data (see MODEL.md). Deferred
+backlog lives in [FUTURE_PLANS.md](FUTURE_PLANS.md).
 
 ## Data & terms
 
-eBird data are non-commercial (Cornell Lab of Ornithology Terms of Use). This tool serves only **derived** products (estimated frequencies, recommendations), never the raw dataset.
+eBird data are provided by the Cornell Lab of Ornithology under a non-commercial
+[Terms of Use](https://www.birds.cornell.edu/home/ebird-api-terms-of-use/). This project serves
+only **derived** products (estimated frequencies, recommendations) and **never** redistributes the
+raw dataset or any personal life-list export — both are gitignored. The bundled `data/taxonomy/`
+files are eBird/Clements published reference checklists, distinct from the observation dataset.
+
+## License
+
+[MIT](LICENSE) — covers the source code only, not eBird data (see above).
