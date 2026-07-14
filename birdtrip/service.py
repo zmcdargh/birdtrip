@@ -57,6 +57,23 @@ def _inlist(vals) -> str:
     return "(" + ",".join(_lit(v) for v in vals) + ")"
 
 
+def _prune_pred(sites) -> str:
+    """A WHERE fragment that restricts a store scan to the states and lat/lon box of a set of
+    candidate hotspots. On a store sorted by (state, latitude, longitude) this lets DuckDB skip
+    row-groups for unrelated states/latitudes. It is ONLY a performance hint — the caller's
+    `locality_id IN (...)` filter still decides correctness, so an over-broad box is harmless."""
+    if sites is None or getattr(sites, "empty", True):
+        return ""
+    parts = []
+    states = [s for s in sites["state"].dropna().unique()] if "state" in sites else []
+    if states:
+        parts.append(f"state IN {_inlist(states)}")
+    if "latitude" in sites and sites["latitude"].notna().any():
+        parts.append(f"latitude BETWEEN {float(sites['latitude'].min())} AND {float(sites['latitude'].max())}")
+        parts.append(f"longitude BETWEEN {float(sites['longitude'].min())} AND {float(sites['longitude'].max())}")
+    return (" AND " + " AND ".join(parts)) if parts else ""
+
+
 # --- effort model: P(detect | present) at a given number of HOURS of birding ---------------
 # When the store carries a per-hour rate lambda_hr (built by the duration-aware precompute) we use
 # the time-to-detection form 1 - exp(-lambda*hours); otherwise (older store / synthetic test store)
@@ -471,12 +488,12 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
     # take a buffer beyond topn so excluding restricted hotspots still leaves a full list
     peaks = cs.loc[cs.groupby("locality_id")["score"].idxmax()].sort_values("score", ascending=False).head(topn + 40)
     top_ids = peaks["locality_id"].tolist()
-    full = _cell_scores(pq, alpha, k, life_list=life_list, locality_ids=top_ids, targets=targets,
-                        hours=hours, has_lambda=has_lambda)  # full-year curves
+    full = _cell_scores(pq, alpha, k, states=states, life_list=life_list, locality_ids=top_ids,
+                        targets=targets, hours=hours, has_lambda=has_lambda)  # full-year curves
     curves = {}
     for lid, g in full.groupby("locality_id"):
         wk = [0.0] * 48
-        for _, r in g.iterrows():
+        for r in g.itertuples():
             wk[int(r.week) - 1] = round(float(r.score), 3)
         curves[lid] = wk
     # bird-level detail for the few top hotspots only — from Parquet via DuckDB (fast, no index needed)
@@ -485,10 +502,11 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
     else:
         ll = f"AND species_code NOT IN {_inlist(life_list)}" if life_list else ""
     lamcol = ", lambda_hr" if has_lambda else ""
+    stpred = f" AND state IN {_inlist(states)}" if states else ""   # prune to chosen state(s)
     detail = _q(
         f"SELECT locality, locality_id, state, week, species_code, common_name, occupancy, "
         f"detect_given_present, det_a, det_b, p_lifer_1, w, latitude, longitude{lamcol} FROM '{pq}' "
-        f"WHERE locality_id IN {_inlist(top_ids)} AND trusted=1 {ll}")
+        f"WHERE locality_id IN {_inlist(top_ids)} AND trusted=1{stpred} {ll}")
     out = []
     for prow in peaks.itertuples():
         if len(out) >= topn:
@@ -650,7 +668,7 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
         rich = _q(f"""SELECT locality_id, MAX(s) rich FROM (
             SELECT locality_id, week, SUM(occupancy*{pdet}) s FROM '{pq}'
             WHERE locality_id IN {_inlist(sites['locality_id'].tolist())} AND week IN ({wkin})
-              AND trusted=1 {sp} GROUP BY locality_id, week) GROUP BY locality_id
+              AND trusted=1 {sp}{_prune_pred(sites)} GROUP BY locality_id, week) GROUP BY locality_id
             ORDER BY rich DESC LIMIT {int(max_sites)}""")
         sites = sites[sites["locality_id"].isin(set(rich["locality_id"]))].reset_index(drop=True)
     elif not pq and len(sites) > max_sites:
@@ -666,6 +684,9 @@ def plan_itinerary(store: Store, base_lat, base_lon, radius_km, start_date, n_da
             where.append(f"species_code IN {_inlist(targets)}")
         elif life_list:
             where.append(f"species_code NOT IN {_inlist(life_list)}")
+        pp = _prune_pred(sites)
+        if pp:
+            where.append(pp[len(" AND "):])
         cells = _q(f"SELECT {', '.join(cols)} FROM '{pq}' WHERE {' AND '.join(where)}")
     else:
         cells = _slice(store, occ_gate, locality_ids=locids, weeks=wks)
@@ -708,7 +729,7 @@ def plan_itinerary_window(store: Store, base_lat, base_lon, radius_km, n_days,
         pdet = _pdetect_sql(hours_per_day, max(1, int(round(hours_per_day))), has_lambda)
         rich = _q(f"""SELECT locality_id, MAX(s) rich FROM (
             SELECT locality_id, week, SUM(occupancy*{pdet}) s FROM '{pq}'
-            WHERE locality_id IN {_inlist(sites['locality_id'].tolist())} AND trusted=1 {sp}
+            WHERE locality_id IN {_inlist(sites['locality_id'].tolist())} AND trusted=1 {sp}{_prune_pred(sites)}
             GROUP BY locality_id, week) GROUP BY locality_id ORDER BY rich DESC LIMIT {int(max_sites)}""")
         sites = sites[sites["locality_id"].isin(set(rich["locality_id"]))].reset_index(drop=True)
     elif not pq and len(sites) > max_sites:
@@ -721,6 +742,8 @@ def plan_itinerary_window(store: Store, base_lat, base_lon, radius_km, n_days,
         where = [f"locality_id IN {_inlist(locids)}", "trusted=1"]
         if targets: where.append(f"species_code IN {_inlist(targets)}")
         elif life_list: where.append(f"species_code NOT IN {_inlist(life_list)}")
+        pp = _prune_pred(sites)
+        if pp: where.append(pp[len(" AND "):])
         cells_all = _q(f"SELECT {', '.join(cols)} FROM '{pq}' WHERE {' AND '.join(where)}")
     else:
         cells_all = _slice(store, occ_gate, locality_ids=locids)
@@ -806,7 +829,7 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
     # build each finalist's candidate sites IN MEMORY (cached coords), then fetch ALL their cells in
     # ONE scan and run the greedy per cluster in memory — no per-finalist parquet scans.
     fin = []
-    all_locs, all_weeks = set(), set()
+    all_locs, all_weeks, all_sites = set(), set(), []
     for r in best.itertuples():
         d = date(ref_year, 1, 1) + timedelta(days=int((int(r.week) - 1) * 7.61))
         sites = _candidate_sites(store, pq, float(r.lat), float(r.lon), float(radius_km))
@@ -816,6 +839,7 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
             continue
         wks = _itin.trip_weeks(d, int(n_days))
         fin.append((r, d, sites, wks)); all_locs |= set(sites["locality_id"]); all_weeks |= set(int(w) for w in wks)
+        all_sites.append(sites)
     if not fin:
         return {"trips": [], "n_clusters": int(len(best)), "n_days": int(n_days)}
     cols = ["locality_id", "week", "species_code", "common_name", "occupancy", "detect_given_present", "w"] \
@@ -825,6 +849,8 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
                  f"week IN ({','.join(str(w) for w in all_weeks)})", "trusted=1"]
         if targets: where.append(f"species_code IN {_inlist(targets)}")
         elif life_list: where.append(f"species_code NOT IN {_inlist(life_list)}")
+        pp = _prune_pred(pd.concat(all_sites) if all_sites else None)
+        if pp: where.append(pp[len(" AND "):])
         cell_cache = _q(f"SELECT {', '.join(cols)} FROM '{pq}' WHERE {' AND '.join(where)}")
     else:
         cell_cache = _slice(store, 0.0, locality_ids=list(all_locs), weeks=list(all_weeks))

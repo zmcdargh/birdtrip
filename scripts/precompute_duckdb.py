@@ -337,7 +337,11 @@ def main():
         # from DuckDB's own data, so it's fast (no SQLite re-read).
         pq = a.out.rsplit(".", 1)[0] + ".parquet"
         print(f"writing Parquet store -> {pq}…", flush=True)
-        con.execute(f"COPY cells_final TO '{pq}' (FORMAT PARQUET);")
+        # ORDER BY (state, latitude, longitude): clusters the file so the serving queries can skip
+        # row-groups via Parquet min/max stats — state-filtered (recommend) and radius/bbox
+        # (itinerary, best-trips) scans then read a thin slice instead of the whole store.
+        con.execute(f"COPY (SELECT * FROM cells_final ORDER BY state, latitude, longitude) "
+                    f"TO '{pq}' (FORMAT PARQUET);")
         n = con.execute("SELECT COUNT(*) FROM cells_final").fetchone()[0]
         if a.parquet_only:
             con.close()
