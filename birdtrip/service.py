@@ -26,6 +26,18 @@ def _parquet(store: Store):
     return pq if os.path.exists(pq) else None
 
 
+def _grid_proxy_paths(store: Store):
+    """Paths to the precomputed best_trips grid sidecars (per-(cell,week,species) max occupancy +
+    cell centroids) that sit next to the store, if they exist. These let the location-agnostic
+    best_trips shortlist read a few-MB table instead of scanning the whole store."""
+    pq = _parquet(store)
+    if not pq:
+        return (None, None)
+    base = pq[:-len(".parquet")]
+    g, c = base + ".grid.parquet", base + ".gridcen.parquet"
+    return (g if os.path.exists(g) else None, c if os.path.exists(c) else None)
+
+
 def _duck():
     global _DUCK
     if _DUCK is None:
@@ -789,7 +801,15 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
           else f"AND species_code NOT IN {_inlist(life_list)}" if life_list else "")
     stf = f"AND state IN {_inlist(states)}" if states else ""
     wf = f"AND week={int(week)}" if week else ""
-    if pq:
+    gpq, cpq = _grid_proxy_paths(store)
+    if pq and gpq and cpq and not states:
+        # FAST location-agnostic path: the per-(cell,week,species) max-occupancy proxy was
+        # precomputed offline, so we read a few-MB sidecar instead of scanning the full store.
+        # Filtering species AFTER the per-species MAX is identical to filtering before it, so this
+        # matches the live scan exactly. State-filtered searches still use the live (pruned) path.
+        prox = _q(f"SELECT gy, gx, week, SUM(mo) proxy FROM '{gpq}' WHERE TRUE {sp} {wf} GROUP BY 1,2,3")
+        cen = _q(f"SELECT gy, gx, lat, lon, state, nhot FROM '{cpq}'")
+    elif pq:
         prox = _q(f"""WITH c AS (
             SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code, MAX(occupancy) mo
             FROM '{pq}' WHERE trusted=1 AND latitude IS NOT NULL {sp} {stf} {wf} GROUP BY 1,2,3,4)
