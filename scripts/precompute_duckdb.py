@@ -343,20 +343,6 @@ def main():
         con.execute(f"COPY (SELECT * FROM cells_final ORDER BY state, latitude, longitude) "
                     f"TO '{pq}' (FORMAT PARQUET);")
         n = con.execute("SELECT COUNT(*) FROM cells_final").fetchone()[0]
-        # best_trips grid-proxy sidecars: per-(cell,week,species) max occupancy + cell centroids.
-        # Lets the location-agnostic best_trips shortlist read a few-MB table instead of scanning
-        # the whole store (see birdtrip/service.py find_best_trips, scripts/make_grid_proxy.py).
-        GRID_DEG = 0.9   # must match find_best_trips' grid resolution
-        gbase = pq[:-len(".parquet")]
-        print("writing best_trips grid proxy sidecars…", flush=True)
-        con.execute(f"""COPY (SELECT floor(latitude/{GRID_DEG}) gy, floor(longitude/{GRID_DEG}) gx,
-            week, species_code, MAX(occupancy) mo FROM cells_final
-            WHERE trusted=1 AND latitude IS NOT NULL AND species_code IS NOT NULL
-            GROUP BY 1,2,3,4) TO '{gbase}.grid.parquet' (FORMAT PARQUET);""")
-        con.execute(f"""COPY (SELECT floor(latitude/{GRID_DEG}) gy, floor(longitude/{GRID_DEG}) gx,
-            AVG(latitude) lat, AVG(longitude) lon, any_value(state) state,
-            COUNT(DISTINCT locality_id) nhot FROM cells_final
-            WHERE trusted=1 AND latitude IS NOT NULL GROUP BY 1,2) TO '{gbase}.gridcen.parquet' (FORMAT PARQUET);""")
         if a.parquet_only:
             con.close()
         else:

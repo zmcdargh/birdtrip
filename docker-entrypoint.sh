@@ -6,8 +6,6 @@ set -e
 
 PARQ="${BIRDTRIP_DB%.sqlite}.parquet"          # e.g. /data/birdtrip.parquet
 RECAL="${BIRDTRIP_DB%.sqlite}.recal.json"
-GRID="${PARQ%.parquet}.grid.parquet"           # best_trips proxy sidecars (optional)
-GRIDCEN="${PARQ%.parquet}.gridcen.parquet"
 mkdir -p "$(dirname "$PARQ")" "${BIRDTRIP_DUCK_TMP:-/tmp}"
 
 if [ ! -f "$PARQ" ]; then
@@ -20,20 +18,6 @@ if [ ! -f "$PARQ" ]; then
     fi
   else
     echo "[entrypoint] WARNING: no store at $PARQ and STORE_URL unset — API will 503 until one is present." >&2
-  fi
-fi
-
-# best_trips grid-proxy sidecars: derived from STORE_URL (…/birdtrip.parquet -> …/birdtrip.grid.parquet).
-# Optional — if absent, best_trips falls back to scanning the store live. Non-fatal on failure.
-if [ -n "$STORE_URL" ]; then
-  if [ ! -f "$GRID" ]; then
-    echo "[entrypoint] downloading best_trips grid proxy -> $GRID"
-    curl -fSL --retry 3 "${STORE_URL%.parquet}.grid.parquet" -o "$GRID.part" && mv "$GRID.part" "$GRID" \
-      || echo "[entrypoint] grid proxy not available (best_trips will scan live)"
-  fi
-  if [ ! -f "$GRIDCEN" ]; then
-    curl -fSL --retry 3 "${STORE_URL%.parquet}.gridcen.parquet" -o "$GRIDCEN.part" && mv "$GRIDCEN.part" "$GRIDCEN" \
-      || echo "[entrypoint] grid centroids not available"
   fi
 fi
 
