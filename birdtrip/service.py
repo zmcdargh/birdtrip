@@ -852,18 +852,17 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
     wf = f"AND week={int(week)}" if week else ""
     gpq, cpq = _grid_proxy_paths(store)
     if pq and gpq and cpq:
-        # FAST path: the per-(cell,week,species) proxy — mo = observation-weighted MEAN occupancy,
-        # i.e. the cell pooled into one "super-hotspot" — was precomputed offline, so we read a
-        # few-MB sidecar instead of scanning the full store. SUM(mo) over species = expected species
-        # present at a typical site in the cell. A state selection (incl. "Lower 48") restricts by
-        # cell centroid via the centroids sidecar (the inner merge below drops unselected cells).
+        # FAST path: the per-(cell,week,species) max-occupancy proxy was precomputed offline, so we
+        # read a few-MB sidecar instead of scanning the full store. Filtering species AFTER the
+        # per-species MAX is identical to filtering before it. A state selection (incl. "Lower 48")
+        # restricts by cell centroid via the centroids sidecar — the inner merge below drops any
+        # cell whose state isn't selected, so we still avoid the full scan.
         prox = _q(f"SELECT gy, gx, week, SUM(mo) proxy FROM '{gpq}' WHERE TRUE {sp} {wf} GROUP BY 1,2,3")
         cen = _q(f"SELECT gy, gx, lat, lon, state, nhot FROM '{cpq}'"
                  + (f" WHERE state IN {_inlist(states)}" if states else ""))
-    elif pq:   # no sidecar: compute the same mean-occupancy proxy live (slim store lacks
-               # n_checklists, so this fallback is an UNWEIGHTED mean — fine for tiny/dev stores)
+    elif pq:
         prox = _q(f"""WITH c AS (
-            SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code, AVG(occupancy) mo
+            SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx, week, species_code, MAX(occupancy) mo
             FROM '{pq}' WHERE trusted=1 AND latitude IS NOT NULL {sp} {stf} {wf} GROUP BY 1,2,3,4)
           SELECT gy, gx, week, SUM(mo) proxy FROM c GROUP BY 1,2,3""")
         cen = _q(f"""SELECT floor(latitude/{g}) gy, floor(longitude/{g}) gx,
@@ -877,7 +876,7 @@ def find_best_trips(store: Store, n_days, hours_per_day=4.0, alpha=0.0, life_lis
         elif life_list: df = df[~df["species_code"].isin(set(life_list))]
         if week: df = df[df["week"] == int(week)]
         df["gy"] = np.floor(df["latitude"] / g); df["gx"] = np.floor(df["longitude"] / g)
-        mo = df.groupby(["gy", "gx", "week", "species_code"])["occupancy"].mean().reset_index()
+        mo = df.groupby(["gy", "gx", "week", "species_code"])["occupancy"].max().reset_index()
         prox = mo.groupby(["gy", "gx", "week"])["occupancy"].sum().reset_index().rename(columns={"occupancy": "proxy"})
         cen = df.groupby(["gy", "gx"]).agg(lat=("latitude", "mean"), lon=("longitude", "mean"),
                                            state=("state", "first"), nhot=("locality_id", "nunique")).reset_index()

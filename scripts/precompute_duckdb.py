@@ -349,11 +349,8 @@ def main():
         GRID_DEG = 0.9   # must match find_best_trips' grid resolution
         gbase = pq[:-len(".parquet")]
         print("writing best_trips grid proxy sidecars…", flush=True)
-        # mo = observation-weighted MEAN occupancy per (cell,week,species): pools the cell into one
-        # "super-hotspot", robust to hotspot count/noise (see make_grid_proxy.py / find_best_trips).
         con.execute(f"""COPY (SELECT floor(latitude/{GRID_DEG}) gy, floor(longitude/{GRID_DEG}) gx,
-            week, species_code, SUM(occupancy*n_checklists) / NULLIF(SUM(n_checklists),0) mo
-            FROM cells_final
+            week, species_code, MAX(occupancy) mo FROM cells_final
             WHERE trusted=1 AND latitude IS NOT NULL AND species_code IS NOT NULL
             GROUP BY 1,2,3,4) TO '{gbase}.grid.parquet' (FORMAT PARQUET);""")
         con.execute(f"""COPY (SELECT floor(latitude/{GRID_DEG}) gy, floor(longitude/{GRID_DEG}) gx,
