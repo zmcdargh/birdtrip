@@ -146,7 +146,10 @@ def plan(cells: pd.DataFrame, sites: pd.DataFrame, start_date, n_days: int,
         if recal is not None:                                  # calibrate the single-visit detection prob,
             p1 = np.clip(occv * dpos, 0, 1)                    # then back out a calibrated detect-given-present
             p1c = recal[np.rint(p1 * (len(recal) - 1)).astype(int)]
-            dpos = np.where(occv > 1e-9, np.clip(p1c / occv, 0, 1), dpos)
+            # divide only where occupancy is non-negligible (avoids a wasted /0 that NumPy warns on;
+            # np.where would otherwise compute p1c/occv for every element before masking)
+            ratio = np.divide(p1c, occv, out=np.zeros_like(occv, dtype=float), where=occv > 1e-9)
+            dpos = np.where(occv > 1e-9, np.clip(ratio, 0, 1), dpos)
         occ = np.zeros(S); occ[idx] = occv
         D = np.zeros(S); D[idx] = np.clip(dpos, 0, 1)
         O_cell[(loc, int(wk))] = occ
