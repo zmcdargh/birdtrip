@@ -102,19 +102,19 @@ improves log-loss (0.62 → 0.44), because log-loss punishes the confident-and-w
 
 λ recovers field knowledge with no labels. Among NY hotspot cells with ≥10 checklists:
 
-- **Clean skulker/conspicuous separation** (`lambda_skulkers_violin.png`). Every classic
+- **Clean skulker/conspicuous separation** (`figures/lambda_skulkers_violin.png`). Every classic
   skulker sits at λ = 0.05–0.29/h, every conspicuous bird at 0.35–1.34/h, with a gap near 0.3.
   In intuitive units (minutes to a 50/50 detection, given present): **Connecticut Warbler ≈ 13.5
   h**, rails/bitterns 4–7 h, vs **American Robin / Canada Goose ≈ 31 min**.
-- **Detectability is its own axis, distinct from rarity** (`lambda_detectability_map.png`).
+- **Detectability is its own axis, distinct from rarity** (`figures/lambda_detectability_map.png`).
   Spearman(λ, range) = 0.30 (weak). Common-but-cryptic species (Marsh Wren, Swamp Sparrow, at
   ~18k hotspots) sit low on λ; scarce-but-obvious species (Snowy Owl) sit higher. (λ vs *local*
   occupancy is 0.64 — shared abundance — but λ carries real crypsis signal beyond abundance.)
-- **Detectability has a season** (`lambda_seasonal_skulkers.png`). λ for marsh skulkers peaks
+- **Detectability has a season** (`figures/lambda_seasonal_skulkers.png`). λ for marsh skulkers peaks
   when they are vocal — Marsh Wren May–Jul, American Bittern early spring, Whip-poor-will after
   spring arrival.
 
-**"Biggest surprises"** (`lambda_surprises.png`): species whose λ is far from what their
+**"Biggest surprises"** (`figures/lambda_surprises.png`): species whose λ is far from what their
 commonness predicts. This does triple duty: it (a) **validates** real cryptic species (Connecticut
 & Kentucky Warbler, Yellow-breasted Chat, Gray-cheeked Thrush, Olive-sided & Yellow-bellied
 Flycatcher — harder to find than their numbers suggest), (b) **flags data artifacts** (escaped
@@ -136,15 +136,15 @@ Month-by-month occupancy, hex-binned across NY (true heatmap: every surveyed hex
 dark = surveyed-but-absent = 0; bright = present; un-surveyed hexes are not drawn so the state
 footprint shows). No geography or habitat is given to the model; the patterns emerge from the data.
 
-- `hexmap_snowy_owl.png` — winter only (Nov–Mar) on the coast and northern plains; absent in summer.
-- `hexmap_short_eared_owl.png` — winter only, on inland grasslands/open country (cleanly distinct
+- `figures/hexmap_snowy_owl.png` — winter only (Nov–Mar) on the coast and northern plains; absent in summer.
+- `figures/hexmap_short_eared_owl.png` — winter only, on inland grasslands/open country (cleanly distinct
   from the Snowy Owl's coastal pattern).
-- `hexmap_blackburnian.png` — absent Nov–Apr; statewide in May/Sep migration; breeds Jun–Jul in the
+- `figures/hexmap_blackburnian.png` — absent Nov–Apr; statewide in May/Sep migration; breeds Jun–Jul in the
   Adirondack/Catskill highland forests.
-- `hexmap_saltmarsh_sparrow.png` — only on the Long Island / NYC coastal salt marshes, May–Nov;
+- `figures/hexmap_saltmarsh_sparrow.png` — only on the Long Island / NYC coastal salt marshes, May–Nov;
   never inland. A habitat obligate, pinned to the coast.
 
-**Migration timing** (`arrival_sweep.png` NY, `us_arrival_sweep.png` continental): per-hex first
+**Migration timing** (`figures/arrival_sweep.png` NY, `figures/us_arrival_sweep.png` continental): per-hex first
 week occupancy crosses a threshold = spring arrival. At continental scale the wave is unmistakable
 — Ruby-throated Hummingbird, Baltimore Oriole, Rose-breasted Grosbeak and Scarlet Tanager all
 sweep from the Gulf Coast (March) to Canada (June). Within NY alone the gradient is real but

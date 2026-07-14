@@ -39,3 +39,9 @@ eb_shrinkage_*.csv
 
 # local tooling / vendored skills — not part of the app
 skills/
+
+# research-only figures kept locally under figures/ but out of the repo.
+# (The subset referenced by MODEL.md is tracked explicitly; these are the rest.)
+figures/eb_*.png
+figures/map_*.png
+figures/swarm_*.png
