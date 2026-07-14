@@ -36,3 +36,6 @@ ebd_*.txt
 
 # stray per-run diagnostic tables dumped at repo root (regenerable; keep repo clean)
 eb_shrinkage_*.csv
+
+# local tooling / vendored skills — not part of the app
+skills/
