@@ -133,12 +133,12 @@
       <button class="tab" id="tabItin" type="button">Plan a trip</button>
     </div>
 
-    <!-- ================= FIND SPOTS WIZARD ================= -->
+    <!-- ===== WIZARD: step 1 shared by both modes; steps 2–3 vary by mode (data-mode) ===== -->
     <div id="wiz">
       <div class="dots"><span class="dot" data-s="1"></span><span class="dot" data-s="2"></span><span class="dot" data-s="3"></span></div>
 
-      <!-- Step 1: who/what -->
-      <div class="stepcard" id="step1">
+      <!-- STEP 1 (both modes): which birds -->
+      <div class="stepcard" data-step="1" id="cardBirds">
         <div class="steptitle">Which birds?</div>
         <div class="stepsub">Find species that are new to you, chase specific birds, or just see the best spots.</div>
         <div class="fld">
@@ -154,56 +154,24 @@
             <div id="targetdrop" class="drop" style="display:none"></div>
           </div>
         </div>
+        <div class="fld">
+          <label>Emphasize local rarities: <span class="val" id="aval">0.0</span></label>
+          <input type="range" id="alpha" min="0" max="1" step="0.1" value="0"/>
+          <div class="hint">0 = most birds overall · 1 = up-weight birds that are hard to get elsewhere</div>
+        </div>
         <div class="navrow"><button class="btn primary" id="n1">Next →</button></div>
       </div>
 
-      <!-- Step 2: when -->
-      <div class="stepcard" id="step2" style="display:none">
+      <!-- STEP 2 — Find spots: when -->
+      <div class="stepcard" data-step="2" data-mode="search" id="cardWhen" style="display:none">
         <div class="steptitle">When are you going?</div>
         <div class="stepsub">Tap the month(s) you'll be birding. Skip to consider the whole year.</div>
         <div class="months" id="months"></div>
         <div class="navrow"><button class="btn" id="b2">← Back</button><button class="btn primary" id="n2">Next →</button></div>
       </div>
 
-      <!-- Step 3: where (mandatory) -->
-      <div class="stepcard" id="step3" style="display:none">
-        <div class="steptitle">Where will you bird? <span style="color:var(--accent)">*</span></div>
-        <div class="stepsub">Tap the state(s) on the map below. This one's required — birdtrip searches within the states you pick.</div>
-        <div id="statechips" class="statechips chips"></div>
-        <div class="fld" style="margin-top:12px">
-          <label>Favor local specialties: <span class="val" id="aval">0.0</span></label>
-          <input type="range" id="alpha" min="0" max="1" step="0.1" value="0"/>
-          <div class="hint">0 = most birds overall · 1 = up-weight birds that are hard to get elsewhere</div>
-        </div>
-        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <input type="checkbox" id="exclrestrict_s"/> Exclude restricted-access spots</label>
-        <div class="navrow"><button class="btn" id="b3">← Back</button><button class="btn go" id="search" disabled>Find spots</button></div>
-        <div id="status" class="hint" style="margin-top:8px"></div>
-      </div>
-    </div>
-
-    <!-- ================= PLAN A TRIP (kept as its own mode) ================= -->
-    <!-- ================= PLAN A TRIP WIZARD ================= -->
-    <div id="itinCtls" style="display:none">
-      <div class="dots"><span class="dot" data-p="1"></span><span class="dot" data-p="2"></span><span class="dot" data-p="3"></span></div>
-
-      <!-- Step 1: which birds -->
-      <div class="stepcard" id="pstep1">
-        <div class="steptitle">Which birds?</div>
-        <div class="stepsub">Chase specific birds, or plan for all your lifers. Your life list from Find spots still applies.</div>
-        <div class="fld">
-          <label>Target birds <span class="hint">(optional)</span></label>
-          <div id="targetchips2" class="chips"></div>
-          <div class="tcwrap">
-            <input type="text" id="targetinput2" autocomplete="off" placeholder="Limit the trip to these birds…"/>
-            <div id="targetdrop2" class="drop" style="display:none"></div>
-          </div>
-        </div>
-        <div class="navrow"><button class="btn primary" id="pn1">Next →</button></div>
-      </div>
-
-      <!-- Step 2: base + range -->
-      <div class="stepcard" id="pstep2" style="display:none">
+      <!-- STEP 2 — Plan: base + radius -->
+      <div class="stepcard" data-step="2" data-mode="itinerary" id="cardBase" style="display:none">
         <div class="steptitle">Where's your base?</div>
         <div class="stepsub">Tap the map below to drop your base camp — we plan day trips around it. Or skip, and we'll find the best trips anywhere.</div>
         <div id="baseinfo" class="hint">No base set — we'll search anywhere.</div>
@@ -215,8 +183,19 @@
         <div class="navrow"><button class="btn" id="pb2">← Back</button><button class="btn primary" id="pn2">Next →</button></div>
       </div>
 
-      <!-- Step 3: when + how long -->
-      <div class="stepcard" id="pstep3" style="display:none">
+      <!-- STEP 3 — Find spots: where (states, required) -->
+      <div class="stepcard" data-step="3" data-mode="search" id="cardWhere" style="display:none">
+        <div class="steptitle">Where will you bird? <span style="color:var(--accent)">*</span></div>
+        <div class="stepsub">Tap the state(s) on the map below. Required — birdtrip searches within the states you pick.</div>
+        <div id="statechips" class="statechips chips"></div>
+        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px;margin:10px 0 6px">
+          <input type="checkbox" id="exclrestrict_s"/> Exclude restricted-access spots</label>
+        <div class="navrow"><button class="btn" id="b3">← Back</button><button class="btn go" id="search" disabled>Find spots</button></div>
+        <div id="status" class="hint" style="margin-top:8px"></div>
+      </div>
+
+      <!-- STEP 3 — Plan: when & how long -->
+      <div class="stepcard" data-step="3" data-mode="itinerary" id="cardLen" style="display:none">
         <div class="steptitle">When &amp; how long?</div>
         <div class="stepsub">Set your dates and daily effort, then plan the trip.</div>
         <div class="fld">
@@ -240,7 +219,7 @@
       </div>
     </div>
 
-    <a id="newplan" class="link" style="display:none;margin-bottom:8px" onclick="newPlan()">← New plan</a>
+    <a id="newplan" class="link" style="display:none;margin-bottom:8px" onclick="restart()">← Start over</a>
     <div id="results"></div>
     <div class="fld" id="birdfindwrap" style="display:none;margin-top:14px">
       <label>Find a bird in this trip <span class="hint">(which day?)</span></label>
@@ -301,14 +280,13 @@ $('alpha').oninput = e=>{ state.alpha=+e.target.value; $('aval').textContent=sta
 
 // ---------- target-species autocomplete (works for both find-spots & plan tabs) ----------
 function renderChips(){
-  const html = state.targets.map((t,i)=>`<span class="chip">${t.name}<span data-i="${i}" title="remove">×</span></span>`).join('');
-  ['targetchips','targetchips2'].forEach(id=>{ const el=$(id); if(!el) return; el.innerHTML=html;
-    el.querySelectorAll('.chip span').forEach(x=> x.onclick=()=>{ state.targets.splice(+x.dataset.i,1); renderChips(); }); });
+  const el=$('targetchips'); if(!el) return;
+  el.innerHTML = state.targets.map((t,i)=>`<span class="chip">${t.name}<span data-i="${i}" title="remove">×</span></span>`).join('');
+  el.querySelectorAll('.chip span').forEach(x=> x.onclick=()=>{ state.targets.splice(+x.dataset.i,1); renderChips(); });
 }
 function addTarget(code,name){
   if(!state.targets.some(t=>t.code===code)) state.targets.push({code,name});
-  ['targetinput','targetinput2'].forEach(id=>{ if($(id)) $(id).value=''; });
-  ['targetdrop','targetdrop2'].forEach(id=>{ if($(id)) $(id).style.display='none'; });
+  $('targetinput').value=''; $('targetdrop').style.display='none';
   renderChips();
 }
 function wireAutocomplete(inputId, dropId){
@@ -327,7 +305,6 @@ function wireAutocomplete(inputId, dropId){
   $(inputId).onblur = ()=> setTimeout(()=>drop.style.display='none',150);
 }
 wireAutocomplete('targetinput','targetdrop');
-wireAutocomplete('targetinput2','targetdrop2');
 
 $('lifefile').onchange = async e=>{
   const f=e.target.files[0]; if(!f) return; const fd=new FormData(); fd.append('file',f);
@@ -382,52 +359,39 @@ function renderStateChips(){
   if(state.mode==='search') status(n? `${n} state${n>1?'s':''} selected.` : '');
 }
 
-// ================= WIZARD =================
+// ================= WIZARD (step 1 shared; steps 2–3 depend on mode) =================
 function goStep(n){
   state.step=n;
-  [1,2,3].forEach(i=>{ $('step'+i).style.display = i===n?'':'none'; });
+  document.querySelectorAll('#wiz .stepcard').forEach(c=>{
+    const st=+c.dataset.step, md=c.dataset.mode;              // step-1 card carries no data-mode
+    c.style.display = (st===n && (!md || md===state.mode)) ? '' : 'none';
+  });
   document.querySelectorAll('#wiz .dot').forEach(d=>{ const s=+d.dataset.s;
     d.classList.toggle('on', s===n); d.classList.toggle('done', s<n); });
-  if(n===3){ fixMap(); renderStateChips(); status(state.regions.size? '':'Tap the state(s) you\'ll bird in on the map.'); }
+  if(n===2 && state.mode==='itinerary') fixMap();              // base-camp step uses the map
+  if(n===3){ fixMap();
+    if(state.mode==='search'){ renderStateChips(); status(state.regions.size? '':'Tap the state(s) you\'ll bird in on the map.'); } }
 }
+// both modes share step numbers, so every Back/Next maps to the same transition
 $('n1').onclick=()=>goStep(2);
-$('b2').onclick=()=>goStep(1);
-$('n2').onclick=()=>goStep(3);
-$('b3').onclick=()=>goStep(2);
+$('b2').onclick=$('pb2').onclick=()=>goStep(1);
+$('n2').onclick=$('pn2').onclick=()=>goStep(3);
+$('b3').onclick=$('pb3').onclick=()=>goStep(2);
 $('search').onclick=()=>{
   if(!state.regions.size) return;
   state.searchStates=[...state.regions];
   state.hasSearched=true;
-  showSearchStage('results');
+  showStage('results');
   runRecommend();
 };
 
-// toggle between the wizard and the results list within Find-spots mode
-function showSearchStage(which){
+// toggle between the wizard and the results (shared by both modes)
+function showStage(which){
   $('wiz').style.display = which==='wizard' ? '' : 'none';
-  if(which==='wizard'){ $('results').innerHTML=''; goStep(state.step); }
+  $('newplan').style.display = which==='results' ? '' : 'none';
+  if(which==='wizard'){ $('results').innerHTML=''; $('birdfindwrap').style.display='none'; goStep(state.step||1); }
 }
-function newSearch(){ showSearchStage('wizard'); goStep(1); }
-
-// ---- Plan-a-trip wizard (mirrors the Find-spots one) ----
-function goPlanStep(n){
-  state.planStep=n;
-  [1,2,3].forEach(i=>{ $('pstep'+i).style.display = i===n?'':'none'; });
-  document.querySelectorAll('#itinCtls .dot').forEach(d=>{ const s=+d.dataset.p;
-    d.classList.toggle('on', s===n); d.classList.toggle('done', s<n); });
-  if(n===2) fixMap();
-}
-$('pn1').onclick=()=>goPlanStep(2);
-$('pb2').onclick=()=>goPlanStep(1);
-$('pn2').onclick=()=>goPlanStep(3);
-$('pb3').onclick=()=>goPlanStep(2);
-// toggle between the plan wizard and the trip results
-function showPlanStage(which){
-  $('itinCtls').style.display = which==='wizard' ? '' : 'none';
-  $('newplan').style.display  = which==='results' ? '' : 'none';
-  if(which==='wizard'){ $('results').innerHTML=''; $('birdfindwrap').style.display='none'; goPlanStep(state.planStep); }
-}
-function newPlan(){ showPlanStage('wizard'); goPlanStep(1); }
+function restart(){ state.step=1; showStage('wizard'); }
 
 let reqSeq=0;
 async function runRecommend(){
@@ -442,7 +406,7 @@ async function runRecommend(){
     const recs=await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(my!==reqSeq) return; renderResults(recs);
   }catch(e){ if(my===reqSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'
-      +'<div style="margin-top:10px"><a class="link" onclick="newSearch()">← New search</a></div>'; }
+      +'<div style="margin-top:10px"><a class="link" onclick="restart()">← Start over</a></div>'; }
 }
 
 function matchColor(v){ return v>=90?'#1a9850':v>=75?'#7fbf3f':v>=60?'#f4c20d':v>=40?'#f39c12':'#bbb'; }
@@ -451,9 +415,8 @@ const lifers = (lo,hi)=> lo===hi ? `${lo}` : `${lo}–${hi}`;
 function renderResults(recs){
   lastRecs=recs; recLayer.clearLayers(); recMarkers=[]; fixMap();
   const head = `<div class="optbar">
-      <a class="link" onclick="newSearch()">← New search</a>
       <span style="flex:1"></span>
-      <label style="font-size:12px;color:var(--mute)">specialties</label>
+      <label style="font-size:12px;color:var(--mute)">rarities</label>
       <input type="range" id="alpha2" min="0" max="1" step="0.1" value="${state.alpha}" style="width:110px;height:20px"/>
       <span class="val" id="aval2">${state.alpha.toFixed(1)}</span></div>`;
   if(!recs.length){ $('results').innerHTML=head+'<div class="hint">No hotspots for that selection — try different states or months.</div>'; wireAlpha2(); return; }
@@ -570,23 +533,23 @@ function toggleRestricted(locid){
 (function(){ const d=new Date(); d.setDate(d.getDate()+((6-d.getDay()+7)%7||7)); $('startdate').value=d.toISOString().slice(0,10); })();
 
 function setMode(m){
-  state.mode=m;
+  state.mode=m; state.step=1;
   $('tabSearch').classList.toggle('on', m==='search');
   $('tabItin').classList.toggle('on', m==='itinerary');
-  $('wiz').style.display = m==='search' ? '' : 'none';
+  // the tappable state polygons belong to Find spots only; in Plan mode the map is for the base pin
+  if(m==='search'){ if(!map.hasLayer(regionLayer)) map.addLayer(regionLayer); }
+  else if(map.hasLayer(regionLayer)) map.removeLayer(regionLayer);
   renderChips(); fixMap();
   if(m==='itinerary'){
     recLayer.clearLayers();
     if(lastPlan){ renderItinerary(lastPlan, false); }     // resume a plan already made this session
-    else { showPlanStage('wizard'); $('detail').innerHTML='<div class="hint">Set up your trip on the left, then Plan.</div>'; }
+    else { showStage('wizard'); $('detail').innerHTML='<div class="hint">Set up your trip on the left, then Plan.</div>'; }
   } else {
-    $('itinCtls').style.display='none'; $('newplan').style.display='none'; $('birdfindwrap').style.display='none';
     itinLayer.clearLayers();
     if(baseMarker){ map.removeLayer(baseMarker); baseMarker=null; }
     if(baseCircle){ map.removeLayer(baseCircle); baseCircle=null; }
-    showSearchStage(state.hasSearched?'results':'wizard');
-    if(state.hasSearched && lastRecs.length) renderResults(lastRecs);
-    else $('detail').innerHTML='<div class="hint">Pick your states, hit Find spots, then tap a result.</div>';
+    if(state.hasSearched && lastRecs.length){ showStage('results'); renderResults(lastRecs); }
+    else { showStage('wizard'); $('detail').innerHTML='<div class="hint">Pick your states, hit Find spots, then tap a result.</div>'; }
   }
 }
 $('tabSearch').onclick=()=>setMode('search');
@@ -615,7 +578,7 @@ async function applyAsk(cfg){
   if(cfg.radius_km!=null){ $('radius').value=cfg.radius_km; $('radval').textContent=cfg.radius_km+' km'; if(baseCircle) baseCircle.setRadius(cfg.radius_km*1000); }
   const loading=m=>$('results').innerHTML='<div class="loading"><div class="spin"></div>'+m+'</div>';
   if(cfg.mode==='find_spots'){
-    setMode('search'); showSearchStage('results'); state.hasSearched=true; loading('Finding spots…');
+    setMode('search'); showStage('results'); state.hasSearched=true; loading('Finding spots…');
     const body={ life_list:state.lifeList, targets:t.length?t:null, states:cfg.states||null, weeks:cfg.week?[cfg.week]:null,
       k:1, hours:SPOT_HOURS, alpha:cfg.alpha??0, topn:12, exclude_restricted:false, user_restricted:ur };
     renderResults(await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
@@ -660,7 +623,7 @@ $('plan').onclick=async ()=>{
   if(!baseMarker){ return runBestTrips(); }
   const auto=$('autowindow').checked;
   if(!auto && !$('startdate').value){ $('itinstatus').textContent='⚠ Pick a start date, or check "Find the best time for me".'; return; }
-  showPlanStage('results');
+  showStage('results');
   const my=++planSeq;
   $('plan').disabled=true; $('plan').textContent=auto?'Finding the best time…':'Planning…';
   $('results').innerHTML='<div class="loading"><div class="spin"></div>'+(auto?'Searching the year for the best window…':'Planning your trip…')+'</div>';
@@ -677,7 +640,7 @@ $('plan').onclick=async ()=>{
 
 let lastBest=null;
 async function runBestTrips(){
-  showPlanStage('results');
+  showStage('results');
   const my=++planSeq;
   $('plan').disabled=true; $('plan').textContent='Finding best trips…';
   $('results').innerHTML='<div class="loading"><div class="spin"></div>Finding the most rewarding trips… (this one takes a moment)</div>';
@@ -691,7 +654,7 @@ async function runBestTrips(){
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 }
 function renderBestTrips(r){
-  if(state.mode==='itinerary') showPlanStage('results');
+  if(state.mode==='itinerary') showStage('results');
   lastBest=r; const trips=r.trips||[]; $('birdfindwrap').style.display='none'; fixMap();
   if(!trips.length){ $('results').innerHTML='<div class="hint">No trips found — try a larger radius or more days.</div>'; $('itinstatus').textContent='No trips found.'; return; }
   const medals=['🥇','🥈','🥉'];
@@ -718,7 +681,7 @@ function windowCurveHTML(curve,chosen){
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mute)"><span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Dec</span></div></div>`;
 }
 function renderItinerary(plan,fit=true){
-  if(state.mode==='itinerary') showPlanStage('results');
+  if(state.mode==='itinerary') showStage('results');
   lastPlan=plan; itinLayer.clearLayers(); fixMap();
   if(!plan.days.length){ $('results').innerHTML='<div class="hint">'+(plan.message||'No reachable hotspots.')+'</div>'; $('itinstatus').textContent=plan.message||'Nothing in range.'; $('birdfindwrap').style.display='none'; return; }
   const auto=plan.auto_window;
