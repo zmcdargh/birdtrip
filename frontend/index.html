@@ -2,226 +2,272 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"/>
 <title>birdtrip — plan your lifers</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
-  :root { --ink:#222; --mute:#777; --line:#e3e3e3; --accent:#c0392b; --bg:#fafafa; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); }
-  #app { display:grid; grid-template-columns:370px 1fr; height:100vh; }
-  #panel { overflow-y:auto; border-right:1px solid var(--line); padding:18px; background:var(--bg); }
-  #right { display:grid; grid-template-rows:58% 42%; height:100vh; position:relative; }
-  #map { width:100%; height:100%; }
-  #maploading { position:absolute; inset:0; z-index:1100; display:flex; flex-direction:column;
-    align-items:center; justify-content:center; gap:6px; background:rgba(250,250,250,0.82);
-    color:var(--mute); font-size:13px; }
-  #detail { overflow-y:auto; border-top:1px solid var(--line); padding:16px 20px; background:#fff; }
-  h1 { font-size:18px; margin:0 0 2px; }
-  .sub { color:var(--mute); margin:0 0 16px; font-size:12px; }
-  .ctl { margin-bottom:15px; }
-  .ctl label { display:block; font-weight:600; margin-bottom:5px; font-size:12.5px; }
-  input[type=range]{ width:100%; }
+  :root { --ink:#222; --mute:#777; --line:#e3e3e3; --accent:#c0392b; --bg:#fafafa; --go:#1e7a44; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font:15px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; color:var(--ink); background:#fff; }
+
+  /* ---- layout: single column on phones, two panes on wide screens ---- */
+  #app { display:flex; flex-direction:column; min-height:100vh; min-height:100dvh; }
+  #left { padding:16px; }
+  #right { display:flex; flex-direction:column; }
+  #map { width:100%; height:46vh; min-height:300px; }
+  #detail { padding:16px; border-top:1px solid var(--line); background:#fff; }
+  @media (min-width:860px){
+    #app { display:grid; grid-template-columns:400px 1fr; height:100vh; }
+    #left { overflow-y:auto; border-right:1px solid var(--line); background:var(--bg); height:100vh; }
+    #right { height:100vh; display:grid; grid-template-rows:60% 40%; }
+    #map { height:100%; }
+    #detail { overflow-y:auto; }
+  }
+
+  h1 { font-size:20px; margin:0 0 2px; }
+  .sub { color:var(--mute); margin:0 0 14px; font-size:12.5px; }
+  .hint { color:var(--mute); font-size:12px; }
+  a.link { color:var(--accent); text-decoration:none; font-size:12.5px; cursor:pointer; }
+  a.link:hover { text-decoration:underline; }
+
+  /* mode tabs */
+  .tabs { display:flex; gap:8px; margin-bottom:14px; }
+  .tab { flex:1; padding:11px 0; border:1px solid var(--line); background:#fff; border-radius:8px;
+         cursor:pointer; font-size:14px; font-weight:600; color:var(--mute); }
+  .tab.on { background:var(--ink); color:#fff; border-color:var(--ink); }
+
+  /* wizard */
+  .dots { display:flex; gap:7px; justify-content:center; margin:2px 0 14px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#d6d6d6; }
+  .dot.on { background:var(--accent); } .dot.done { background:#f0b3ab; }
+  .stepcard { border:1px solid var(--line); border-radius:12px; padding:18px 16px; background:#fff;
+              box-shadow:0 1px 3px rgba(0,0,0,.04); }
+  .steptitle { font-size:17px; font-weight:700; margin:0 0 3px; }
+  .stepsub { color:var(--mute); font-size:12.5px; margin:0 0 14px; }
+  .fld { margin-bottom:14px; }
+  .fld > label { display:block; font-weight:600; margin-bottom:6px; font-size:13px; }
+  input[type=text], input[type=date], input[type=file] {
+    width:100%; font-size:15px; padding:10px; border:1px solid var(--line); border-radius:8px; background:#fff; }
+  input[type=range]{ width:100%; height:26px; }
   .val { font-variant-numeric:tabular-nums; color:var(--mute); font-size:12px; }
-  .months { display:grid; grid-template-columns:repeat(6,1fr); gap:4px; }
-  .months button { padding:4px 0; border:1px solid var(--line); background:#fff; border-radius:4px; cursor:pointer; font-size:11px; }
+
+  /* big touch buttons */
+  .btn { min-height:48px; padding:12px; border-radius:9px; cursor:pointer; font-size:15px; font-weight:600;
+         border:1px solid var(--ink); background:#fff; color:var(--ink); }
+  .btn.primary { background:var(--ink); color:#fff; }
+  .btn.go { background:var(--go); border-color:var(--go); color:#fff; }
+  .btn:disabled { opacity:.45; cursor:default; }
+  .navrow { display:flex; gap:10px; margin-top:16px; }
+  .navrow .btn { flex:1; }
+
+  /* months */
+  .months { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; }
+  .months button { padding:11px 0; border:1px solid var(--line); background:#fff; border-radius:8px;
+                   cursor:pointer; font-size:13px; }
   .months button.on { background:var(--ink); color:#fff; border-color:var(--ink); }
-  .hint { color:var(--mute); font-size:11.5px; }
+
+  /* target autocomplete + chips */
   .tcwrap { position:relative; }
   .drop { position:absolute; left:0; right:0; top:100%; z-index:2000; background:#fff;
-          border:1px solid var(--line); border-radius:5px; max-height:200px; overflow-y:auto;
-          box-shadow:0 3px 10px rgba(0,0,0,.12); }
-  .drop div { padding:6px 9px; cursor:pointer; font-size:12.5px; }
+          border:1px solid var(--line); border-radius:8px; max-height:230px; overflow-y:auto;
+          box-shadow:0 3px 12px rgba(0,0,0,.14); }
+  .drop div { padding:11px 12px; cursor:pointer; font-size:14px; border-bottom:1px solid #f2f2f2; }
   .drop div:hover, .drop div.active { background:#eef3f8; }
-  .chips { display:flex; flex-wrap:wrap; gap:4px; margin-bottom:5px; }
-  .chip { background:#eef3f8; border:1px solid #cfe0ee; border-radius:12px; padding:2px 4px 2px 9px;
-          font-size:11.5px; display:inline-flex; gap:6px; align-items:center; }
-  .chip span { cursor:pointer; color:var(--accent); font-weight:700; padding:0 3px; }
-  #go,#plan { width:100%; padding:9px; border:1px solid var(--ink); background:var(--ink); color:#fff;
-        border-radius:5px; cursor:pointer; font-size:14px; font-weight:600; }
-  #go:disabled,#plan:disabled { opacity:.6; cursor:default; }
-  #status,#itinstatus { font-size:12px; color:var(--mute); min-height:16px; margin-top:6px; }
-  .tabs { display:flex; gap:6px; }
-  .tab { flex:1; padding:7px 0; border:1px solid var(--line); background:#fff; border-radius:5px;
-         cursor:pointer; font-size:12.5px; font-weight:600; color:var(--mute); }
-  .tab.on { background:var(--ink); color:#fff; border-color:var(--ink); }
-  /* itinerary day cards */
-  .day { border:1px solid var(--line); border-radius:6px; padding:8px 10px; margin-bottom:7px;
-         background:#fff; cursor:pointer; display:flex; gap:10px; align-items:flex-start; }
-  .day:hover { border-color:var(--ink); } .day.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
-  .day .num { flex:0 0 30px; height:30px; border-radius:50%; background:var(--accent); color:#fff;
-        font-weight:700; font-size:13px; display:flex; align-items:center; justify-content:center; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .chip { background:#eef3f8; border:1px solid #cfe0ee; border-radius:14px; padding:5px 6px 5px 12px;
+          font-size:13px; display:inline-flex; gap:7px; align-items:center; }
+  .chip span { cursor:pointer; color:var(--accent); font-weight:700; padding:0 4px; font-size:15px; }
+  .statechips { min-height:22px; }
+  .statechips:empty::before { content:"None yet — tap states on the map below."; color:var(--mute); font-size:12.5px; }
+
+  /* results */
+  #results { margin-top:4px; }
+  .optbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:2px 0 12px; }
+  .rec, .day, .trip { border:1px solid var(--line); border-radius:9px; padding:11px 12px; margin-bottom:9px;
+        background:#fff; cursor:pointer; display:flex; gap:11px; align-items:flex-start; }
+  .rec:hover,.day:hover,.trip:hover { border-color:var(--ink); }
+  .rec.active,.day.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .badge { flex:0 0 40px; height:40px; border-radius:8px; color:#fff; font-weight:700; font-size:16px;
+           display:flex; align-items:center; justify-content:center; }
+  .rec h3,.day h3 { margin:0 0 2px; font-size:14.5px; } .rec .meta,.day .meta { color:var(--mute); font-size:12.5px; }
+  .day .num { flex:0 0 32px; height:32px; border-radius:50%; background:var(--accent); color:#fff;
+        font-weight:700; font-size:14px; display:flex; align-items:center; justify-content:center; }
   .day.rest .num { background:#bbb; }
-  .day h3 { margin:0 0 1px; font-size:13px; } .day .meta { color:var(--mute); font-size:11.5px; }
-  .pin { color:#fff; border-radius:50%; width:24px; height:24px; display:flex; align-items:center;
+  .pin { color:#fff; border-radius:50%; width:26px; height:26px; display:flex; align-items:center;
          justify-content:center; font-size:12px; font-weight:700; border:2px solid #fff;
          box-shadow:0 1px 4px rgba(0,0,0,.4); }
-  .loading { text-align:center; color:var(--mute); font-size:12.5px; padding:18px 0; }
-  .spin { width:26px; height:26px; margin:0 auto 8px; border:3px solid #e2e2e2;
+  .loading { text-align:center; color:var(--mute); font-size:13px; padding:22px 0; }
+  .spin { width:28px; height:28px; margin:0 auto 9px; border:3px solid #e2e2e2;
           border-top-color:var(--accent); border-radius:50%; animation:sp .8s linear infinite; }
   @keyframes sp { to { transform:rotate(360deg); } }
-  .ebird { color:var(--accent); text-decoration:none; font-size:11.5px; }
+  .ebird { color:var(--accent); text-decoration:none; font-size:12px; }
   .ebird:hover { text-decoration:underline; }
-  .rec { border:1px solid var(--line); border-radius:6px; padding:9px 10px; margin-bottom:8px; background:#fff; cursor:pointer; display:flex; gap:10px; align-items:flex-start; }
-  .rec:hover { border-color:var(--ink); } .rec.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
-  .badge { flex:0 0 38px; height:38px; border-radius:7px; color:#fff; font-weight:700; font-size:15px;
-           display:flex; align-items:center; justify-content:center; }
-  .rec h3 { margin:0 0 2px; font-size:13.5px; } .rec .meta { color:var(--mute); font-size:12px; }
-  .bird { display:grid; grid-template-columns:62px 1fr; gap:8px; align-items:center; margin:3px 0; font-size:12.5px; }
-  .bird .pct { color:var(--mute); font-variant-numeric:tabular-nums; text-align:right; font-size:11.5px; }
-  .bar { background:#f0f0f0; border-radius:4px; height:18px; position:relative; overflow:hidden; }
-  /* familiar fill from 0 to the likelihood; a soft haze marks the uncertain zone near the top */
-  .bar > .fill { position:absolute; left:0; top:0; bottom:0; border-radius:4px 0 0 4px; background:#8fbad9; }
-  .bar > .fuzz { position:absolute; top:0; bottom:0;
-    background:linear-gradient(90deg, rgba(44,111,166,0.30), rgba(44,111,166,0.05)); }
-  .bar > em { position:absolute; left:7px; top:0; font-style:normal; font-size:11.5px; line-height:18px; color:#1a3a52; }
+  .bird { display:grid; grid-template-columns:64px 1fr; gap:9px; align-items:center; margin:4px 0; font-size:13px; }
+  .bird .pct { color:var(--mute); font-variant-numeric:tabular-nums; text-align:right; font-size:12px; }
+  .bar { background:#f0f0f0; border-radius:5px; height:20px; position:relative; overflow:hidden; }
+  .bar > .fill { position:absolute; left:0; top:0; bottom:0; border-radius:5px 0 0 5px; background:#8fbad9; }
+  .bar > .fuzz { position:absolute; top:0; bottom:0; background:linear-gradient(90deg, rgba(44,111,166,0.30), rgba(44,111,166,0.05)); }
+  .bar > em { position:absolute; left:8px; top:0; font-style:normal; font-size:12.5px; line-height:20px; color:#1a3a52; }
+  #maploading { position:absolute; inset:0; z-index:1100; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:6px; background:rgba(250,250,250,0.85); color:var(--mute); font-size:13px; }
+  #ask { display:flex; gap:7px; margin-bottom:12px; }
+  #ask input { flex:1; }
 </style>
 </head>
 <body>
 <div id="app">
-  <div id="panel">
+  <div id="left">
     <h1>birdtrip</h1>
-    <p class="sub">Find the best places and times to go birding, from eBird data. Add your life list
-      to find new species, or name target birds to chase specific ones. Every filter is optional —
-      set what you care about and hit Go.</p>
+    <p class="sub">Find the best places and times to go birding, from eBird data.</p>
 
-    <div id="askwrap" class="ctl" style="display:none">
-      <label>Ask in plain English</label>
-      <div style="display:flex;gap:6px">
-        <input id="askq" type="text" placeholder="e.g. warblers within 3 hours of Denver in May"
-          style="flex:1;font-size:12px;padding:6px;border:1px solid var(--line);border-radius:4px"/>
-        <button id="askgo" type="button">Ask</button>
+    <div id="askwrap" style="display:none">
+      <div id="ask">
+        <input id="askq" type="text" placeholder="e.g. warblers in New York in May"/>
+        <button id="askgo" class="btn primary" type="button" style="flex:0 0 auto;min-height:0;padding:10px 14px">Ask</button>
       </div>
-      <div id="askstatus" class="hint" style="margin-top:4px"></div>
+      <div id="askstatus" class="hint" style="margin:-6px 0 12px"></div>
     </div>
 
-    <div class="ctl tabs">
+    <div class="tabs">
       <button class="tab on" id="tabSearch" type="button">Find spots</button>
       <button class="tab" id="tabItin" type="button">Plan a trip</button>
     </div>
 
-    <div class="ctl">
-      <label>Your life list <span class="hint">(optional)</span></label>
-      <input type="file" id="lifefile" accept=".csv" style="font-size:12px"/>
-      <div id="lifestatus" class="hint">No list — every species counts as a lifer.</div>
-    </div>
-    <div class="ctl">
-      <label>Target species <span class="hint">(optional)</span></label>
-      <div id="targetchips" class="chips"></div>
-      <div class="tcwrap">
-        <input type="text" id="targetinput" autocomplete="off" placeholder="Type a bird name…"
-          style="width:100%;font-size:12px;padding:5px;border:1px solid var(--line);border-radius:4px"/>
-        <div id="targetdrop" class="drop" style="display:none"></div>
-      </div>
-      <div class="hint" id="targethint">Search for these specific birds instead of all lifers.</div>
-    </div>
-    <div class="ctl">
-      <label>Favor local specialties: <span class="val" id="aval">0.0</span></label>
-      <input type="range" id="alpha" min="0" max="1" step="0.1" value="0"/>
-      <div class="hint">0 = most birds overall · 1 = up-weight birds hard to get elsewhere</div>
-    </div>
+    <!-- ================= FIND SPOTS WIZARD ================= -->
+    <div id="wiz">
+      <div class="dots"><span class="dot" data-s="1"></span><span class="dot" data-s="2"></span><span class="dot" data-s="3"></span></div>
 
-    <div id="searchCtls">
-      <div class="ctl">
-        <label>When <span class="hint">(optional)</span></label>
+      <!-- Step 1: who/what -->
+      <div class="stepcard" id="step1">
+        <div class="steptitle">Which birds?</div>
+        <div class="stepsub">Find species that are new to you, chase specific birds, or just see the best spots.</div>
+        <div class="fld">
+          <label>Upload your life list <span class="hint">(optional)</span></label>
+          <input type="file" id="lifefile" accept=".csv"/>
+          <div id="lifestatus" class="hint" style="margin-top:5px">eBird → Download My Data → the .csv. No list = every species counts as new.</div>
+        </div>
+        <div class="fld">
+          <label>Or chase specific birds <span class="hint">(optional)</span></label>
+          <div id="targetchips" class="chips"></div>
+          <div class="tcwrap">
+            <input type="text" id="targetinput" autocomplete="off" placeholder="Type a bird name…"/>
+            <div id="targetdrop" class="drop" style="display:none"></div>
+          </div>
+        </div>
+        <div class="navrow"><button class="btn primary" id="n1">Next →</button></div>
+      </div>
+
+      <!-- Step 2: when -->
+      <div class="stepcard" id="step2" style="display:none">
+        <div class="steptitle">When are you going?</div>
+        <div class="stepsub">Tap the month(s) you'll be birding. Skip to consider the whole year.</div>
         <div class="months" id="months"></div>
-        <div class="hint" style="margin-top:4px">Click months. None = whole year.</div>
+        <div class="navrow"><button class="btn" id="b2">← Back</button><button class="btn primary" id="n2">Next →</button></div>
       </div>
-      <div class="ctl">
-        <label>Target region <span class="hint">(optional)</span></label>
-        <label style="font-weight:400;font-size:12.5px;margin:4px 0;display:flex;align-items:center;gap:6px">
-          <input type="checkbox" id="lower48"/> Lower 48 only (exclude Alaska &amp; Hawaii)</label>
-        <label style="font-weight:400;font-size:12.5px;margin:4px 0;display:flex;align-items:center;gap:6px">
+
+      <!-- Step 3: where (mandatory) -->
+      <div class="stepcard" id="step3" style="display:none">
+        <div class="steptitle">Where will you bird? <span style="color:var(--accent)">*</span></div>
+        <div class="stepsub">Tap the state(s) on the map below. This one's required — birdtrip searches within the states you pick.</div>
+        <div id="statechips" class="statechips chips"></div>
+        <div class="fld" style="margin-top:12px">
+          <label>Favor local specialties: <span class="val" id="aval">0.0</span></label>
+          <input type="range" id="alpha" min="0" max="1" step="0.1" value="0"/>
+          <div class="hint">0 = most birds overall · 1 = up-weight birds that are hard to get elsewhere</div>
+        </div>
+        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:6px">
           <input type="checkbox" id="exclrestrict_s"/> Exclude restricted-access spots</label>
-        <button id="go">Go</button>
-        <div id="status">Loading regions…</div>
+        <div class="navrow"><button class="btn" id="b3">← Back</button><button class="btn go" id="search" disabled>Find spots</button></div>
+        <div id="status" class="hint" style="margin-top:8px"></div>
       </div>
     </div>
 
+    <!-- ================= PLAN A TRIP (kept as its own mode) ================= -->
     <div id="itinCtls" style="display:none">
-      <div class="ctl">
+      <div class="fld">
         <label>Base camp</label>
-        <div id="baseinfo" class="hint">Click the map to drop your base — we'll plan day trips around it.</div>
+        <div id="baseinfo" class="hint">Tap the map to drop your base — we'll plan day trips around it. Or hit Plan with no pin to find the best trips anywhere.</div>
       </div>
-      <div class="ctl">
+      <div class="fld">
+        <label>Which birds? <span class="hint">(optional)</span></label>
+        <div id="targetchips2" class="chips"></div>
+        <div class="tcwrap">
+          <input type="text" id="targetinput2" autocomplete="off" placeholder="Limit to these birds…"/>
+          <div id="targetdrop2" class="drop" style="display:none"></div>
+        </div>
+        <div class="hint" style="margin-top:4px">Life list from the Find-spots tab still applies.</div>
+      </div>
+      <div class="fld">
         <label>Day-trip radius: <span class="val" id="radval">75 km</span></label>
         <input type="range" id="radius" min="10" max="300" step="5" value="75"/>
-        <div class="hint">How far you'll range from base each day.</div>
       </div>
-      <div class="ctl">
+      <div class="fld">
         <label>Trip start</label>
-        <input type="date" id="startdate"
-          style="width:100%;font-size:12px;padding:5px;border:1px solid var(--line);border-radius:4px"/>
-        <label style="display:block;margin-top:6px;font-size:12px;color:var(--mute);font-weight:400;cursor:pointer">
+        <input type="date" id="startdate"/>
+        <label style="display:block;margin-top:8px;font-size:13px;color:var(--mute);font-weight:400;cursor:pointer">
           <input type="checkbox" id="autowindow"/> Find the best time for me</label>
       </div>
-      <div class="ctl">
+      <div class="fld">
         <label>Trip length: <span class="val" id="dayval">5 days</span></label>
         <input type="range" id="ndays" min="1" max="14" step="1" value="5"/>
       </div>
-      <div class="ctl">
+      <div class="fld">
         <label>Hours of birding per day: <span class="val" id="effval">4 h</span></label>
         <input type="range" id="kday" min="1" max="12" step="1" value="4"/>
-        <div class="hint">More hours → higher chance to detect each bird (with diminishing returns).</div>
       </div>
-      <label style="font-weight:400;font-size:12.5px;margin:0 0 8px;display:flex;align-items:center;gap:6px">
+      <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <input type="checkbox" id="exclrestrict"/> Exclude restricted-access spots</label>
-      <button id="plan" type="button">Plan trip</button>
-      <div id="itinstatus">Drop a base on the map — or hit Plan with no pin to find the best trips anywhere.</div>
-      <div class="ctl" id="birdfindwrap" style="display:none;margin-top:12px">
+      <button id="plan" class="btn go" type="button" style="width:100%">Plan trip</button>
+      <div id="itinstatus" class="hint" style="margin-top:8px"></div>
+      <div class="fld" id="birdfindwrap" style="display:none;margin-top:14px">
         <label>Find a bird in this trip <span class="hint">(which day?)</span></label>
-        <input type="text" id="birdfind" autocomplete="off" placeholder="e.g. Red-cockaded Woodpecker"
-          style="width:100%;font-size:12px;padding:5px;border:1px solid var(--line);border-radius:4px"/>
-        <div id="birdfindres" class="hint" style="margin-top:5px"></div>
+        <input type="text" id="birdfind" autocomplete="off" placeholder="e.g. Red-cockaded Woodpecker"/>
+        <div id="birdfindres" class="hint" style="margin-top:6px"></div>
       </div>
     </div>
 
     <div id="results"></div>
   </div>
+
   <div id="right">
-    <div id="maploading"><div class="spin"></div>Loading locations…</div>
-    <div id="map"></div>
-    <div id="detail"><div class="hint">Pick region(s), hit Go, then click a recommended spot to see its details here.</div></div>
+    <div style="position:relative;flex:1;min-height:300px">
+      <div id="maploading"><div class="spin"></div>Loading locations…</div>
+      <div id="map"></div>
+    </div>
+    <div id="detail"><div class="hint">Pick your states, hit Find spots, then tap a result to see its birds.</div></div>
   </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<!-- US state boundaries (defines window.statesData); Leaflet's own long-hosted file -->
 <script src="https://leafletjs.com/examples/choropleth/us-states.js"></script>
 <script>
-const state = { mode:'search', lifeList:[], weeks:null, k:1, alpha:0, regions:new Set(), targets:[], searchStates:null, hasSearched:false };
-const map = L.map('map').setView([39.5,-98.35],4);
-// CARTO Positron basemap — clean, light, free with attribution (nicer than raw OSM tiles)
+const state = { mode:'search', step:1, lifeList:[], weeks:null, alpha:0, regions:new Set(), targets:[], searchStates:null, hasSearched:false };
+const map = L.map('map',{tap:true}).setView([39.5,-98.35],4);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {subdomains:'abcd', attribution:'© OpenStreetMap © CARTO', maxZoom:19}).addTo(map);
 const regionLayer = L.layerGroup().addTo(map);
 const recLayer = L.layerGroup().addTo(map);
-const regionLayers = {};   // state name -> leaflet layer (polygon outline, or dot fallback)
-const SEL={color:'#c0392b',weight:2.5,fillColor:'#c0392b',fillOpacity:0.4};
+const itinLayer = L.layerGroup().addTo(map);
+const regionLayers = {};
+const SEL={color:'#c0392b',weight:2.5,fillColor:'#c0392b',fillOpacity:0.45};
 const UNSEL={color:'#c0392b',weight:1.2,fillColor:'#c0392b',fillOpacity:0.05};
-const dotStyle=s=>({radius:9,color:'#c0392b',weight:2,fillColor:'#c0392b',fillOpacity:s?0.85:0.25});
-let recMarkers = [];        // result index -> marker
-let lastRecs = [];
-let allStates = [];         // every state that has data (for "Lower 48 only")
-const OFF48 = ['Alaska','Hawaii'];
+const dotStyle=s=>({radius:10,color:'#c0392b',weight:2,fillColor:'#c0392b',fillOpacity:s?0.85:0.25});
+let recMarkers=[], lastRecs=[];
 
 const $ = id => document.getElementById(id);
 const status = m => $('status').textContent = m;
 const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fixMap(){ setTimeout(()=>map.invalidateSize(),120); }
 
 async function getJSON(url,opts){
   let r; try { r=await fetch(url,opts); }
-  catch(e){ throw new Error(`network error reaching ${url} — open http://127.0.0.1:8000 (not the file)?`); }
+  catch(e){ throw new Error(`network error reaching ${url}`); }
   if(!r.ok){ let d=''; try{ d=(await r.json()).detail||''; }catch(_){ } throw new Error(`${url} HTTP ${r.status}${d?' — '+d:''}`); }
   return r.json();
 }
 function debounce(fn,ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; }
 
-// NOTE: nothing here triggers a SEARCH — adjusting season/specialties only updates the controls.
-// (The species autocomplete does fire lightweight /species lookups, but never a full search.)
-// A recommendation query runs ONLY when the user clicks Go.
-
-// season months
+// ---------- season months ----------
 function selectedWeeks(){
   const on=[...document.querySelectorAll('.months button.on')].map(b=>+b.dataset.m);
   if(!on.length) return null; const w=[]; on.forEach(m=>{for(let i=1;i<=4;i++)w.push(m*4+i);}); return w;
@@ -231,52 +277,54 @@ MONTHS.forEach((name,i)=>{ const b=document.createElement('button'); b.textConte
 
 $('alpha').oninput = e=>{ state.alpha=+e.target.value; $('aval').textContent=state.alpha.toFixed(1); };
 
-// --- target-species autocomplete (chips store {code,name}) ---
+// ---------- target-species autocomplete (works for both find-spots & plan tabs) ----------
 function renderChips(){
-  $('targetchips').innerHTML = state.targets.map((t,i)=>
-    `<span class="chip">${t.name}<span data-i="${i}" title="remove">×</span></span>`).join('');
-  document.querySelectorAll('#targetchips .chip span').forEach(x=>
-    x.onclick=()=>{ state.targets.splice(+x.dataset.i,1); renderChips(); });
+  const html = state.targets.map((t,i)=>`<span class="chip">${t.name}<span data-i="${i}" title="remove">×</span></span>`).join('');
+  ['targetchips','targetchips2'].forEach(id=>{ const el=$(id); if(!el) return; el.innerHTML=html;
+    el.querySelectorAll('.chip span').forEach(x=> x.onclick=()=>{ state.targets.splice(+x.dataset.i,1); renderChips(); }); });
 }
 function addTarget(code,name){
   if(!state.targets.some(t=>t.code===code)) state.targets.push({code,name});
-  $('targetinput').value=''; $('targetdrop').style.display='none'; renderChips();
+  ['targetinput','targetinput2'].forEach(id=>{ if($(id)) $(id).value=''; });
+  ['targetdrop','targetdrop2'].forEach(id=>{ if($(id)) $(id).style.display='none'; });
+  renderChips();
 }
-const tdrop=$('targetdrop');
-const aclookup=debounce(async q=>{
-  if(q.length<2){ tdrop.style.display='none'; return; }
-  try{
-    const hits=await getJSON('/species?q='+encodeURIComponent(q));
-    if(!hits.length){ tdrop.style.display='none'; return; }
-    tdrop.innerHTML=hits.map(h=>`<div data-code="${h.species_code}" data-name="${h.common_name.replace(/"/g,'&quot;')}">${h.common_name}</div>`).join('');
-    tdrop.style.display='block';
-    tdrop.querySelectorAll('div').forEach(d=> d.onclick=()=>addTarget(d.dataset.code, d.dataset.name));
-  }catch(e){ tdrop.style.display='none'; }
-}, 160);
-$('targetinput').oninput = e=> aclookup(e.target.value.trim());
-$('targetinput').onblur = ()=> setTimeout(()=>tdrop.style.display='none', 150);  // allow click
+function wireAutocomplete(inputId, dropId){
+  const drop=$(dropId);
+  const look=debounce(async q=>{
+    if(q.length<2){ drop.style.display='none'; return; }
+    try{
+      const hits=await getJSON('/species?q='+encodeURIComponent(q));
+      if(!hits.length){ drop.style.display='none'; return; }
+      drop.innerHTML=hits.map(h=>`<div data-code="${h.species_code}" data-name="${h.common_name.replace(/"/g,'&quot;')}">${h.common_name}</div>`).join('');
+      drop.style.display='block';
+      drop.querySelectorAll('div').forEach(d=> d.onclick=()=>addTarget(d.dataset.code,d.dataset.name));
+    }catch(e){ drop.style.display='none'; }
+  },160);
+  $(inputId).oninput = e=> look(e.target.value.trim());
+  $(inputId).onblur = ()=> setTimeout(()=>drop.style.display='none',150);
+}
+wireAutocomplete('targetinput','targetdrop');
+wireAutocomplete('targetinput2','targetdrop2');
+
 $('lifefile').onchange = async e=>{
   const f=e.target.files[0]; if(!f) return; const fd=new FormData(); fd.append('file',f);
   $('lifestatus').textContent='Parsing…';
   try{ const j=await getJSON('/lifelist',{method:'POST',body:fd}); state.lifeList=j.species_codes||[];
-    $('lifestatus').textContent=`${j.n_species} species on your list — excluded.`;
-    // any results shown were computed before this list loaded (stale: ranking + expected-lifer
-    // counts ignored the list). Re-run the active view so everything uses the list consistently.
+    $('lifestatus').textContent=`${j.n_species} species on your list — excluded from results.`;
     if(state.mode==='itinerary'){ if(lastPlan) $('plan').onclick(); }
     else if(state.hasSearched){ runRecommend(); } }
   catch(err){ $('lifestatus').textContent='⚠ '+err.message; }
 };
 
-// region selection: draw the outline of each state that has data; click toggles it in/out
-// of the search set (no search until Go). Falls back to a dot if boundaries can't be loaded.
+// ---------- region (state) selection on the map ----------
 const STATES_GEO='https://cdn.jsdelivr.net/gh/PublicaMundi/MappingAPI@master/data/geojson/US-states.geojson';
 const geoReady = (typeof statesData !== 'undefined' && statesData)
-  ? Promise.resolve(statesData)                                   // Leaflet's hosted file (preferred)
-  : fetch(STATES_GEO).then(r=>r.json()).catch(()=>null);          // fallback
+  ? Promise.resolve(statesData)
+  : fetch(STATES_GEO).then(r=>r.json()).catch(()=>null);
 Promise.all([ getJSON('/regions?level=state'), geoReady ]).then(([regs, geo])=>{
   $('maploading').style.display='none';
   if(!regs.length){ status('Store empty — build it first.'); return; }
-  allStates = regs.map(g=>g.state);
   const polyByName={}; if(geo) geo.features.forEach(f=>polyByName[f.properties.name]=f);
   const bounds=L.latLngBounds([]);
   regs.forEach(g=>{
@@ -292,8 +340,8 @@ Promise.all([ getJSON('/regions?level=state'), geoReady ]).then(([regs, geo])=>{
       m.on('click',()=>toggleRegion(g.state)); regionLayers[g.state]=m; bounds.extend([g.latitude,g.longitude]);
     }
   });
-  status('Click region(s) to select, then Go.');
-  if(bounds.isValid()) map.fitBounds(bounds,{padding:[40,40],maxZoom:6});
+  if(bounds.isValid()) map.fitBounds(bounds,{padding:[30,30],maxZoom:6});
+  renderStateChips();
 }).catch(e=>{ $('maploading').style.display='none'; status('⚠ '+e.message); });
 
 function toggleRegion(name){
@@ -301,226 +349,213 @@ function toggleRegion(name){
   const sel=!state.regions.has(name);
   sel ? state.regions.add(name) : state.regions.delete(name);
   layer.setStyle(layer.getBounds ? (sel?SEL:UNSEL) : dotStyle(sel));
+  renderStateChips();
+}
+function renderStateChips(){
+  const el=$('statechips'); if(!el) return;
+  el.innerHTML=[...state.regions].map(n=>`<span class="chip">${n}<span data-n="${n}" title="remove">×</span></span>`).join('');
+  el.querySelectorAll('.chip span').forEach(x=> x.onclick=()=>toggleRegion(x.dataset.n));
   const n=state.regions.size;
-  status(n? `Selected: ${[...state.regions].join(', ')} — hit Go.` : 'None selected — Go searches everywhere.');
+  if($('search')) $('search').disabled = n===0;
+  if(state.mode==='search') status(n? `${n} state${n>1?'s':''} selected.` : '');
 }
 
-// resolve which states to search: explicit selection, else everywhere; "Lower 48" drops AK/HI
-function searchStates(){
-  let sel = [...state.regions];
-  const lower48 = $('lower48').checked;
-  if(!sel.length) sel = lower48 ? allStates.filter(s=>!OFF48.includes(s)) : [];
-  else if(lower48) sel = sel.filter(s=>!OFF48.includes(s));
-  return sel.length ? sel : null;   // null = everywhere
+// ================= WIZARD =================
+function goStep(n){
+  state.step=n;
+  [1,2,3].forEach(i=>{ $('step'+i).style.display = i===n?'':'none'; });
+  document.querySelectorAll('.dot').forEach(d=>{ const s=+d.dataset.s;
+    d.classList.toggle('on', s===n); d.classList.toggle('done', s<n); });
+  if(n===3){ fixMap(); renderStateChips(); status(state.regions.size? '':'Tap the state(s) you\'ll bird in on the map.'); }
 }
-
-$('go').onclick = ()=>{
-  state.searchStates = searchStates();
-  state.hasSearched=true; runRecommend();
+$('n1').onclick=()=>goStep(2);
+$('b2').onclick=()=>goStep(1);
+$('n2').onclick=()=>goStep(3);
+$('b3').onclick=()=>goStep(2);
+$('search').onclick=()=>{
+  if(!state.regions.size) return;
+  state.searchStates=[...state.regions];
+  state.hasSearched=true;
+  showSearchStage('results');
+  runRecommend();
 };
+
+// toggle between the wizard and the results list within Find-spots mode
+function showSearchStage(which){
+  $('wiz').style.display = which==='wizard' ? '' : 'none';
+  if(which==='wizard'){ $('results').innerHTML=''; goStep(state.step); }
+}
+function newSearch(){ showSearchStage('wizard'); goStep(1); }
 
 let reqSeq=0;
 async function runRecommend(){
   const my=++reqSeq;
-  $('go').disabled=true; $('go').textContent='Searching…';
-  const targets = state.targets.map(t=>t.code);
+  const targets=state.targets.map(t=>t.code);
   $('results').innerHTML='<div class="loading"><div class="spin"></div>'
-    + (targets.length ? 'Finding your target birds…' : 'Finding the best spots…') + '</div>';
+    + (targets.length?'Finding your target birds…':'Finding the best spots…') + '</div>';
   const body={ life_list:state.lifeList, targets:(targets.length?targets:null), states:state.searchStates,
                weeks:state.weeks, k:1, hours:1, alpha:state.alpha, topn:12,
                exclude_restricted:$('exclrestrict_s').checked, user_restricted:[...userRestricted] };
   try{
     const recs=await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(my!==reqSeq) return; renderResults(recs);
-  }catch(e){ if(my===reqSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
-  finally{ if(my===reqSeq){ $('go').disabled=false; $('go').textContent='Go'; } }
+  }catch(e){ if(my===reqSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'
+      +'<div style="margin-top:10px"><a class="link" onclick="newSearch()">← New search</a></div>'; }
 }
 
-// rescale raw alpha-scores to a comprehensible 0-100 "match" (relative to best); ranking unchanged
 function matchColor(v){ return v>=90?'#1a9850':v>=75?'#7fbf3f':v>=60?'#f4c20d':v>=40?'#f39c12':'#bbb'; }
-const lifers = (lo,hi)=> lo===hi ? `${lo}` : `${lo}–${hi}`;   // mean ± 1 SD, rounded
+const lifers = (lo,hi)=> lo===hi ? `${lo}` : `${lo}–${hi}`;
 
 function renderResults(recs){
-  lastRecs=recs; recLayer.clearLayers(); recMarkers=[];
-  if(!recs.length){ $('results').innerHTML='<div class="hint">No hotspots for that selection.</div>'; return; }
+  lastRecs=recs; recLayer.clearLayers(); recMarkers=[]; fixMap();
+  const head = `<div class="optbar">
+      <a class="link" onclick="newSearch()">← New search</a>
+      <span style="flex:1"></span>
+      <label style="font-size:12px;color:var(--mute)">specialties</label>
+      <input type="range" id="alpha2" min="0" max="1" step="0.1" value="${state.alpha}" style="width:110px;height:20px"/>
+      <span class="val" id="aval2">${state.alpha.toFixed(1)}</span></div>`;
+  if(!recs.length){ $('results').innerHTML=head+'<div class="hint">No hotspots for that selection — try different states or months.</div>'; wireAlpha2(); return; }
   const maxS=Math.max(...recs.map(d=>d.score))||1;
-  $('results').innerHTML = recs.map((d,i)=>{
+  $('results').innerHTML = head + recs.map((d,i)=>{
     const v=Math.round(100*d.score/maxS);
     const where=d.state?`${d.locality} · ${d.state}`:d.locality;
     return `<div class="rec" data-i="${i}">
       <div class="badge" style="background:${matchColor(v)}">${v}</div>
-      <div><h3>#${i+1} ${where}${isRestricted(d)?' <span style="color:#c0392b;font-size:11px;font-weight:600" title="Flagged restricted/limited access — verify before visiting">⚠ access</span>':''}</h3>
-      <div class="meta"><b>${lifers(d.lifers_low,d.lifers_high)}</b> expected lifers</div>
-      <div class="meta">Recommended: ${d.recommended_label}</div>
+      <div><h3>#${i+1} ${where}${isRestricted(d)?' <span style="color:#c0392b;font-size:11px;font-weight:600" title="Flagged restricted/limited access — verify">⚠ access</span>':''}</h3>
+      <div class="meta"><b>${lifers(d.lifers_low,d.lifers_high)}</b> expected lifers · ${d.recommended_label}</div>
       <div class="meta"><a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">View on eBird ↗</a></div>
       </div></div>`;
   }).join('');
-
+  wireAlpha2();
   const pts=[];
   recs.forEach((d,i)=>{ if(d.latitude==null) return;
     const mk=L.marker([d.latitude,d.longitude]).addTo(recLayer)
       .bindTooltip(`#${i+1} ${d.locality}${isRestricted(d)?' ⚠ verify access':''}`,{direction:'top'});
-    mk.on('click',()=>selectResult(i));
-    recMarkers[i]=mk; pts.push([d.latitude,d.longitude]);
+    mk.on('click',()=>selectResult(i)); recMarkers[i]=mk; pts.push([d.latitude,d.longitude]);
   });
   if(pts.length) map.fitBounds(pts,{padding:[50,50],maxZoom:10});
   document.querySelectorAll('.rec').forEach(el=> el.onclick=()=>selectResult(+el.dataset.i));
   renderCurves(recs);
 }
+function wireAlpha2(){
+  const a=$('alpha2'); if(!a) return;
+  a.oninput=e=>{ state.alpha=+e.target.value; $('aval2').textContent=state.alpha.toFixed(1);
+    $('alpha').value=state.alpha; $('aval').textContent=state.alpha.toFixed(1); };
+  a.onchange=()=> runRecommend();
+}
 
 const CURVE_COLORS=['#c0392b','#2c6fa6','#27ae60','#e67e22','#8e44ad','#16a085','#d35400','#2980b9','#c2185b','#607d8b','#00838f','#7cb342'];
-// circular moving average — weeks wrap Dec->Jan, so smoothing across the year boundary is correct
-function smooth(arr, win=7){
-  const n=arr.length, h=(win-1)/2, out=new Array(n);
-  for(let i=0;i<n;i++){ let s=0; for(let j=-h;j<=h;j++) s+=arr[(i+j+n)%n]; out[i]=s/win; }
-  return out;
-}
-// Catmull-Rom spline -> cubic bezier path: smooth curve THROUGH the points (not line segments)
-function smoothPath(pts){
-  if(pts.length<2) return '';
+function smooth(arr, win=7){ const n=arr.length,h=(win-1)/2,out=new Array(n);
+  for(let i=0;i<n;i++){ let s=0; for(let j=-h;j<=h;j++) s+=arr[(i+j+n)%n]; out[i]=s/win; } return out; }
+function smoothPath(pts){ if(pts.length<2) return '';
   let d=`M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-  for(let i=0;i<pts.length-1;i++){
-    const p0=pts[i-1]||pts[i], p1=pts[i], p2=pts[i+1], p3=pts[i+2]||pts[i+1];
-    const c1x=p1[0]+(p2[0]-p0[0])/6, c1y=p1[1]+(p2[1]-p0[1])/6;
-    const c2x=p2[0]-(p3[0]-p1[0])/6, c2y=p2[1]-(p3[1]-p1[1])/6;
-    d+=` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
-  }
-  return d;
-}
-function backToCurves(e){
-  if(e) e.preventDefault();
-  document.querySelectorAll('.rec').forEach(el=> el.classList.remove('active'));
-  renderCurves(lastRecs);
-}
+  for(let i=0;i<pts.length-1;i++){ const p0=pts[i-1]||pts[i],p1=pts[i],p2=pts[i+1],p3=pts[i+2]||pts[i+1];
+    const c1x=p1[0]+(p2[0]-p0[0])/6,c1y=p1[1]+(p2[1]-p0[1])/6,c2x=p2[0]-(p3[0]-p1[0])/6,c2y=p2[1]-(p3[1]-p1[1])/6;
+    d+=` C ${c1x.toFixed(1)} ${c1y.toFixed(1)}, ${c2x.toFixed(1)} ${c2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`; }
+  return d; }
+function backToCurves(e){ if(e) e.preventDefault();
+  document.querySelectorAll('.rec').forEach(el=> el.classList.remove('active')); renderCurves(lastRecs); }
 function renderCurves(recs){
   const withCurve=recs.filter(d=>d.weekly && d.weekly.some(v=>v>0));
-  if(!withCurve.length){ return; }
+  if(!withCurve.length){ $('detail').innerHTML='<div class="hint">Tap a result above to see its likely birds.</div>'; return; }
   const W=680,H=190,padL=6,padB=16,padT=6;
-  const sm=withCurve.map(d=>smooth(d.weekly,7));
-  const max=Math.max(1e-4, ...sm.flat());
-  const X=w=>padL+(w-1)/47*(W-padL-2);
-  const Y=v=>padT+(1-v/max)*(H-padT-padB);
+  const sm=withCurve.map(d=>smooth(d.weekly,7)); const max=Math.max(1e-4, ...sm.flat());
+  const X=w=>padL+(w-1)/47*(W-padL-2), Y=v=>padT+(1-v/max)*(H-padT-padB);
   const MS=[1,5,9,13,17,21,25,29,33,37,41,45], ML='JFMAMJJASOND';
-  const lines=sm.map((curve,i)=>{
-    const pts=curve.map((v,wi)=>[X(wi+1), Y(v)]);
-    return `<path d="${smoothPath(pts)}" fill="none" stroke="${CURVE_COLORS[i%CURVE_COLORS.length]}" stroke-width="1.8" opacity="0.85" stroke-linejoin="round" stroke-linecap="round"/>`;
-  }).join('');
+  const lines=sm.map((curve,i)=>{ const pts=curve.map((v,wi)=>[X(wi+1),Y(v)]);
+    return `<path d="${smoothPath(pts)}" fill="none" stroke="${CURVE_COLORS[i%CURVE_COLORS.length]}" stroke-width="1.8" opacity="0.85" stroke-linejoin="round" stroke-linecap="round"/>`; }).join('');
   const ticks=MS.map((w,i)=>`<text x="${X(w).toFixed(1)}" y="${H-3}" font-size="9" fill="#aaa">${ML[i]}</text>`).join('');
   const legend=withCurve.map((d,i)=>`<span style="white-space:nowrap"><span style="color:${CURVE_COLORS[i%CURVE_COLORS.length]};font-size:14px">■</span> #${recs.indexOf(d)+1} ${d.locality}</span>`).join(' &nbsp; ');
   $('detail').innerHTML=`<h2 style="margin:0 0 2px;font-size:15px">Seasonality</h2>
-    <div class="hint" style="margin-bottom:4px">Score across the year for each recommended hotspot — click a spot below for its bird list.</div>
+    <div class="hint" style="margin-bottom:4px">Score across the year — tap a spot above for its bird list.</div>
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:190px">${lines}${ticks}</svg>
-    <div class="hint" style="margin-top:4px;line-height:1.8">${legend}</div>`;
+    <div class="hint" style="margin-top:4px;line-height:1.9">${legend}</div>`;
 }
-
 function selectResult(i){
   document.querySelectorAll('.rec').forEach(el=> el.classList.toggle('active', +el.dataset.i===i));
   const d=lastRecs[i];
   if(d.latitude!=null){ map.setView([d.latitude,d.longitude], Math.max(map.getZoom(),11)); recMarkers[i]&&recMarkers[i].openTooltip(); }
   showDetail(d);
+  if(window.innerWidth<860) $('map').scrollIntoView({behavior:'smooth',block:'start'});
 }
 
-// ----- bird-list sorting (shared by Find-spots detail + itinerary day panels) -----
-let birdSort = localStorage.getItem('birdtrip_birdsort') || 'prob';   // 'prob' | 'taxon'
-let _rerenderBirds = null;        // set by whichever panel rendered last
-function setBirdSort(mode){
-  birdSort = mode; localStorage.setItem('birdtrip_birdsort', mode);
-  if(_rerenderBirds) _rerenderBirds();
-}
-function sortBirds(arr, pkey){
-  const a = arr.slice();
+// ---- bird-list sorting ----
+let birdSort = localStorage.getItem('birdtrip_birdsort') || 'prob';
+let _rerenderBirds = null;
+function setBirdSort(mode){ birdSort=mode; localStorage.setItem('birdtrip_birdsort',mode); if(_rerenderBirds) _rerenderBirds(); }
+function sortBirds(arr,pkey){ const a=arr.slice();
   if(birdSort==='taxon') a.sort((x,y)=>(x.taxon_order??9e9)-(y.taxon_order??9e9));
-  else a.sort((x,y)=>(y[pkey]??0)-(x[pkey]??0));
-  return a;
-}
-function sortToggle(){   // taxon option only meaningful when records carry taxon_order
-  const tab = m => `<a href="#" class="ebird" style="${birdSort===m?'font-weight:700;text-decoration:none':''}"
-    onclick="event.preventDefault();setBirdSort('${m}')">${m==='prob'?'likelihood':'taxonomic'}</a>`;
-  return `<div class="hint" style="margin-bottom:6px">Sort: ${tab('prob')} · ${tab('taxon')}</div>`;
-}
+  else a.sort((x,y)=>(y[pkey]??0)-(x[pkey]??0)); return a; }
+function sortToggle(){ const tab=m=>`<a href="#" class="ebird" style="${birdSort===m?'font-weight:700;text-decoration:none':''}" onclick="event.preventDefault();setBirdSort('${m}')">${m==='prob'?'likelihood':'taxonomic'}</a>`;
+  return `<div class="hint" style="margin-bottom:6px">Sort: ${tab('prob')} · ${tab('taxon')}</div>`; }
 
 async function showDetail(d){
   $('detail').innerHTML='<div class="hint">Loading…</div>';
   try{
     const s=await getJSON('/summary',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({locality_id:d.locality_id, week:d.week, hours:1, life_list:state.lifeList})});
-    const cap = x => Math.min(99, Math.max(1, Math.round(x*100)));   // never show 0% or 100%
-    const render = ()=>{
-      const rows=sortBirds(s.birds,'p_trip').map(b=>{
-        const p=cap(b.p_trip), lo=cap(b.p_low??b.p_trip), hi=cap(b.p_high??b.p_trip);
-        const rangeTxt = (lo===hi) ? `${lo}%` : `${lo}–${hi}%`;
+    const cap=x=>Math.min(99,Math.max(1,Math.round(x*100)));
+    const render=()=>{
+      const rows=sortBirds(s.birds,'p_trip').map(b=>{ const p=cap(b.p_trip),lo=cap(b.p_low??b.p_trip),hi=cap(b.p_high??b.p_trip);
+        const rangeTxt=(lo===hi)?`${lo}%`:`${lo}–${hi}%`;
         return `<div class="bird"><span class="pct">${rangeTxt}</span>
           <div class="bar"><span class="fill" style="width:${p}%"></span>
-          <span class="fuzz" style="left:${lo}%;width:${Math.max(2,hi-lo)}%"></span>
-          <em>${b.common_name}</em></div></div>`;
-      }).join('');
-      const hasTax = s.birds.some(b=>b.taxon_order!=null);
+          <span class="fuzz" style="left:${lo}%;width:${Math.max(2,hi-lo)}%"></span><em>${b.common_name}</em></div></div>`; }).join('');
+      const hasTax=s.birds.some(b=>b.taxon_order!=null);
       $('detail').innerHTML=`<a href="#" class="ebird" onclick="backToCurves(event)" style="display:inline-block;margin-bottom:6px">← Seasonality</a>
         <h2 style="margin:0 0 4px">${s.locality} <span style="color:var(--mute);font-weight:400">· ${d.state||''}</span></h2>
-        <div class="meta" style="color:var(--mute);font-size:12.5px">Recommended: ${d.recommended_label} · ${s.effort_hours??1} h of birding
-          · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">View on eBird ↗</a></div>
-        ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ ${d.restricted?"Name suggests restricted/limited access — a heuristic guess, verify before visiting.":"You've marked this hotspot restricted."}</div>`:''}
-        <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — click to unmark':'🚫 mark this hotspot restricted'}</a></div>
-        <div style="margin:8px 0 4px;font-size:14px"><b>${lifers(s.lifers_low,s.lifers_high)}</b> expected lifers
-          · chance of seeing at least one new bird: ${s.p_at_least_one>=0.995?'&gt;99%':Math.round(s.p_at_least_one*100)+'%'}</div>
-        <div class="hint" style="margin-bottom:10px">Filled bar = how likely you are to find each · range on the left = our confidence (wider = fewer records)</div>
-        ${hasTax?sortToggle():''}
-        ${rows}`;
+        <div class="meta" style="color:var(--mute);font-size:12.5px">${d.recommended_label} · ${s.effort_hours??1} h · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">eBird ↗</a></div>
+        ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ ${d.restricted?"Name suggests restricted/limited access — verify before visiting.":"You've marked this hotspot restricted."}</div>`:''}
+        <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — unmark':'🚫 mark restricted'}</a></div>
+        <div style="margin:8px 0 4px;font-size:14px"><b>${lifers(s.lifers_low,s.lifers_high)}</b> expected lifers · chance of ≥1 new bird: ${s.p_at_least_one>=0.995?'&gt;99%':Math.round(s.p_at_least_one*100)+'%'}</div>
+        <div class="hint" style="margin-bottom:10px">Filled bar = how likely you'll find each · left range = our confidence (wider = fewer records)</div>
+        ${hasTax?sortToggle():''}${rows}`;
     };
-    _rerenderBirds = render; render();
+    _rerenderBirds=render; render();
   }catch(e){ $('detail').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
 }
 
-// ===================== Itinerary mode (base-camp trip planner) =====================
-const itinLayer = L.layerGroup().addTo(map);
+// ===================== PLAN A TRIP =====================
 let baseMarker=null, baseCircle=null, lastPlan=null, planSeq=0;
-
-// user-maintained restricted-access list (persists in this browser), augments the name heuristic
 const userRestricted = new Set(JSON.parse(localStorage.getItem('birdtrip_restricted')||'[]'));
 const saveRestricted = ()=> localStorage.setItem('birdtrip_restricted', JSON.stringify([...userRestricted]));
 const isRestricted = x => !!(x.restricted || userRestricted.has(x.locality_id));
 function toggleRestricted(locid){
-  userRestricted.has(locid) ? userRestricted.delete(locid) : userRestricted.add(locid);
-  saveRestricted();
-  // refresh whichever tab is active so the ⚠ flags update (no re-fit, no re-query/re-plan)
-  if(state.mode==='itinerary'){ if(lastPlan) renderItinerary(lastPlan, false); }
+  userRestricted.has(locid) ? userRestricted.delete(locid) : userRestricted.add(locid); saveRestricted();
+  if(state.mode==='itinerary'){ if(lastPlan) renderItinerary(lastPlan,false); }
   else if(lastRecs && lastRecs.length) renderResults(lastRecs);
 }
-
-// default trip start = next Saturday
-(function(){ const d=new Date(); d.setDate(d.getDate() + ((6 - d.getDay() + 7) % 7 || 7));
-  $('startdate').value = d.toISOString().slice(0,10); })();
+(function(){ const d=new Date(); d.setDate(d.getDate()+((6-d.getDay()+7)%7||7)); $('startdate').value=d.toISOString().slice(0,10); })();
 
 function setMode(m){
   state.mode=m;
   $('tabSearch').classList.toggle('on', m==='search');
   $('tabItin').classList.toggle('on', m==='itinerary');
-  $('searchCtls').style.display = m==='search' ? '' : 'none';
-  $('itinCtls').style.display   = m==='itinerary' ? '' : 'none';
-  $('targethint').textContent = m==='itinerary'
-    ? 'Limit the trip to these birds (optional).'
-    : 'Search for these specific birds instead of all lifers.';
-  $('results').innerHTML='';
+  $('wiz').style.display = m==='search' ? '' : 'none';
+  $('itinCtls').style.display = m==='itinerary' ? '' : 'none';
+  $('results').innerHTML=''; renderChips(); fixMap();
   if(m==='itinerary'){
-    map.removeLayer(regionLayer); recLayer.clearLayers();
-    $('detail').innerHTML='<div class="hint">Drop a base on the map, set your dates, and Plan trip.</div>';
+    recLayer.clearLayers();
+    $('detail').innerHTML='<div class="hint">Tap the map to drop your base, set your dates, and Plan trip.</div>';
   } else {
-    map.addLayer(regionLayer); itinLayer.clearLayers();
+    itinLayer.clearLayers();
     if(baseMarker){ map.removeLayer(baseMarker); baseMarker=null; }
     if(baseCircle){ map.removeLayer(baseCircle); baseCircle=null; }
-    $('detail').innerHTML='<div class="hint">Pick region(s), hit Go, then click a recommended spot to see its details here.</div>';
+    showSearchStage(state.hasSearched?'results':'wizard');
+    if(state.hasSearched && lastRecs.length) renderResults(lastRecs);
+    else $('detail').innerHTML='<div class="hint">Pick your states, hit Find spots, then tap a result.</div>';
   }
 }
 $('tabSearch').onclick=()=>setMode('search');
 $('tabItin').onclick=()=>setMode('itinerary');
 
-// ---- optional natural-language box: the LLM fills the search, we run it + render normally ----
+// ---- optional natural-language box ----
 fetch('/config').then(r=>r.json()).then(c=>{ if(c && c.ask_enabled) $('askwrap').style.display=''; }).catch(()=>{});
 function askWk2date(w){ const d=new Date(2026,0,1); d.setDate(d.getDate()+Math.round((w-1)*7.61)); return d.toISOString().slice(0,10); }
 async function runAsk(){
   const q=$('askq').value.trim(); if(!q) return;
   $('askgo').disabled=true; $('askstatus').textContent='Thinking…';
-  try{ await applyAsk(await getJSON('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q, life_list:state.lifeList})})); }
+  try{ await applyAsk(await getJSON('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,life_list:state.lifeList})})); }
   catch(e){ $('askstatus').textContent='⚠ '+e.message; }
   finally{ $('askgo').disabled=false; }
 }
@@ -529,7 +564,7 @@ $('askq').addEventListener('keydown',e=>{ if(e.key==='Enter') runAsk(); });
 async function applyAsk(cfg){
   const notes=[]; if(cfg.note) notes.push(cfg.note);
   if(cfg.unresolved_birds && cfg.unresolved_birds.length) notes.push("couldn't match: "+cfg.unresolved_birds.join(', '));
-  $('askstatus').textContent = notes.join(' · ') || 'Done.';
+  $('askstatus').textContent=notes.join(' · ')||'Done.';
   const t=(cfg.targets||[]); const ur=[...userRestricted];
   if(cfg.alpha!=null){ state.alpha=+cfg.alpha; $('alpha').value=cfg.alpha; $('aval').textContent=(+cfg.alpha).toFixed(1); }
   if(cfg.n_days!=null){ $('ndays').value=cfg.n_days; $('dayval').textContent=cfg.n_days+(cfg.n_days==1?' day':' days'); }
@@ -537,7 +572,7 @@ async function applyAsk(cfg){
   if(cfg.radius_km!=null){ $('radius').value=cfg.radius_km; $('radval').textContent=cfg.radius_km+' km'; if(baseCircle) baseCircle.setRadius(cfg.radius_km*1000); }
   const loading=m=>$('results').innerHTML='<div class="loading"><div class="spin"></div>'+m+'</div>';
   if(cfg.mode==='find_spots'){
-    setMode('search'); loading('Finding spots…');
+    setMode('search'); showSearchStage('results'); state.hasSearched=true; loading('Finding spots…');
     const body={ life_list:state.lifeList, targets:t.length?t:null, states:cfg.states||null, weeks:cfg.week?[cfg.week]:null,
       k:1, hours:1, alpha:cfg.alpha??0, topn:12, exclude_restricted:false, user_restricted:ur };
     renderResults(await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
@@ -566,142 +601,114 @@ $('kday').oninput=e=>$('effval').textContent=e.target.value+' h';
 function setBase(latlng){
   if(!baseMarker){
     baseMarker=L.marker(latlng,{draggable:true,
-      icon:L.divIcon({className:'',html:'<div class="pin" style="background:#222">★</div>',iconSize:[24,24],iconAnchor:[12,12]})}).addTo(map);
+      icon:L.divIcon({className:'',html:'<div class="pin" style="background:#222">★</div>',iconSize:[26,26],iconAnchor:[13,13]})}).addTo(map);
     baseMarker.on('dragend',()=>{ const p=baseMarker.getLatLng(); if(baseCircle) baseCircle.setLatLng(p);
       $('baseinfo').textContent=`Base: ${p.lat.toFixed(3)}, ${p.lng.toFixed(3)} — drag to adjust.`; });
   } else baseMarker.setLatLng(latlng);
-  if(!baseCircle){
-    baseCircle=L.circle(latlng,{radius:radiusM(),color:'#222',weight:1,fillColor:'#222',fillOpacity:0.05,interactive:false}).addTo(map);
-  } else baseCircle.setLatLng(latlng);
+  if(!baseCircle){ baseCircle=L.circle(latlng,{radius:radiusM(),color:'#222',weight:1,fillColor:'#222',fillOpacity:0.05,interactive:false}).addTo(map); }
+  else baseCircle.setLatLng(latlng);
   $('baseinfo').textContent=`Base: ${latlng.lat.toFixed(3)}, ${latlng.lng.toFixed(3)} — drag to adjust.`;
   $('itinstatus').textContent='Ready — set your dates and Plan trip.';
 }
 map.on('click',e=>{ if(state.mode==='itinerary') setBase(e.latlng); });
 
-$('autowindow').onchange = ()=>{ $('startdate').disabled = $('autowindow').checked; };
+$('autowindow').onchange=()=>{ $('startdate').disabled=$('autowindow').checked; };
 $('plan').onclick=async ()=>{
-  if(!baseMarker){ return runBestTrips(); }      // no pin dropped → find the best trips anywhere
+  if(!baseMarker){ return runBestTrips(); }
   const auto=$('autowindow').checked;
-  if(!auto && !$('startdate').value){ $('itinstatus').textContent='⚠ Pick a trip start date, or check “Find the best time for me”.'; return; }
+  if(!auto && !$('startdate').value){ $('itinstatus').textContent='⚠ Pick a start date, or check "Find the best time for me".'; return; }
   const my=++planSeq;
-  $('plan').disabled=true; $('plan').textContent= auto?'Finding the best time…':'Planning…';
-  $('results').innerHTML='<div class="loading"><div class="spin"></div>'+(auto?'Searching the whole year for the best window…':'Planning your trip…')+'</div>';
-  const b=baseMarker.getLatLng();
-  const targets=state.targets.map(t=>t.code);
-  const body={ base_lat:b.lat, base_lon:b.lng, radius_km:+$('radius').value,
-    n_days:+$('ndays').value, hours_per_day:+$('kday').value,
+  $('plan').disabled=true; $('plan').textContent=auto?'Finding the best time…':'Planning…';
+  $('results').innerHTML='<div class="loading"><div class="spin"></div>'+(auto?'Searching the year for the best window…':'Planning your trip…')+'</div>';
+  const b=baseMarker.getLatLng(); const targets=state.targets.map(t=>t.code);
+  const body={ base_lat:b.lat, base_lon:b.lng, radius_km:+$('radius').value, n_days:+$('ndays').value, hours_per_day:+$('kday').value,
     alpha:state.alpha, life_list:state.lifeList, targets:(targets.length?targets:null),
     exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
   if(!auto) body.start_date=$('startdate').value;
-  try{
-    const plan=await getJSON('/itinerary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  try{ const plan=await getJSON('/itinerary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(my!==planSeq) return; renderItinerary(plan);
   }catch(e){ if(my===planSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 };
 
-// ---- best-trips: no pin needed, the model finds where + when ----
 let lastBest=null;
 async function runBestTrips(){
   const my=++planSeq;
   $('plan').disabled=true; $('plan').textContent='Finding best trips…';
-  $('results').innerHTML='<div class="loading"><div class="spin"></div>Finding the most rewarding trips for your life list… (this one takes a moment)</div>';
+  $('results').innerHTML='<div class="loading"><div class="spin"></div>Finding the most rewarding trips… (this one takes a moment)</div>';
   const targets=state.targets.map(t=>t.code);
   const body={ n_days:+$('ndays').value, hours_per_day:+$('kday').value, radius_km:+$('radius').value,
     alpha:state.alpha, n_trips:3, states:state.searchStates, life_list:state.lifeList,
     targets:(targets.length?targets:null), exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
-  try{
-    const r=await getJSON('/best_trips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  try{ const r=await getJSON('/best_trips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(my!==planSeq) return; renderBestTrips(r);
   }catch(e){ if(my===planSeq) $('results').innerHTML='<div class="hint">⚠ '+e.message+'</div>'; }
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 }
 function renderBestTrips(r){
-  lastBest=r; const trips=r.trips||[];
-  $('birdfindwrap').style.display='none';
-  if(!trips.length){ $('results').innerHTML='<div class="hint">No trips found — try a wider region (or no region), more days, or a larger radius.</div>';
-    $('itinstatus').textContent='No trips found.'; return; }
+  lastBest=r; const trips=r.trips||[]; $('birdfindwrap').style.display='none'; fixMap();
+  if(!trips.length){ $('results').innerHTML='<div class="hint">No trips found — try a larger radius or more days.</div>'; $('itinstatus').textContent='No trips found.'; return; }
   const medals=['🥇','🥈','🥉'];
-  $('itinstatus').textContent=`Best ${trips.length} trip${trips.length>1?'s':''} found — no pin needed.`;
-  $('results').innerHTML = `<div class="hint" style="margin-bottom:8px">Your most rewarding ${r.n_days}-day trips${state.searchStates?'':' (anywhere)'} — click one for the day-by-day plan:</div>`
-    + trips.map((t,i)=>`<div class="trip" data-i="${i}" style="cursor:pointer;border:1px solid var(--line);border-radius:6px;padding:9px 11px;margin-bottom:7px">
-        <div style="font-size:14px"><b>${medals[i]||('#'+(i+1))} ${t.region||'—'}</b> · ${t.month} (week ${t.week})</div>
-        <div class="meta"><b>${t.expected_lifers_total}</b> expected new lifers · ${t.n_stops} stop${t.n_stops>1?'s':''} · ${t.n_hotspots_in_range} hotspots in range</div>
-      </div>`).join('');
+  $('itinstatus').textContent=`Best ${trips.length} trip${trips.length>1?'s':''} found.`;
+  $('results').innerHTML=`<div class="hint" style="margin-bottom:8px">Your most rewarding ${r.n_days}-day trips — tap one for the day-by-day plan:</div>`
+    + trips.map((t,i)=>`<div class="trip" data-i="${i}">
+        <div><div style="font-size:14.5px"><b>${medals[i]||('#'+(i+1))} ${t.region||'—'}</b> · ${t.month} (week ${t.week})</div>
+        <div class="meta"><b>${t.expected_lifers_total}</b> expected new lifers · ${t.n_stops} stop${t.n_stops>1?'s':''}</div></div></div>`).join('');
   document.querySelectorAll('.trip').forEach(el=> el.onclick=()=>loadTrip(trips[+el.dataset.i]));
 }
 function loadTrip(t){
-  setBase(L.latLng(t.base_lat, t.base_lon)); map.setView([t.base_lat, t.base_lon], 9);
+  setBase(L.latLng(t.base_lat,t.base_lon)); map.setView([t.base_lat,t.base_lon],9);
   $('startdate').value=t.start_date; $('autowindow').checked=false; $('startdate').disabled=false;
-  renderItinerary(t.plan, true);
-  $('results').insertAdjacentHTML('afterbegin',
-    `<a href="#" class="ebird" onclick="event.preventDefault();renderBestTrips(lastBest)" style="display:inline-block;margin-bottom:6px">← back to best trips</a>`);
+  renderItinerary(t.plan,true);
+  $('results').insertAdjacentHTML('afterbegin',`<a href="#" class="ebird" onclick="event.preventDefault();renderBestTrips(lastBest)" style="display:inline-block;margin-bottom:6px">← back to best trips</a>`);
 }
-
-function windowCurveHTML(curve, chosen){
+function windowCurveHTML(curve,chosen){
   if(!curve||!curve.length) return '';
   const mx=Math.max(...curve.map(c=>c.expected_lifers))||1;
   const bars=curve.map(c=>{ const h=Math.max(2,Math.round(40*c.expected_lifers/mx)); const on=c.start_date===chosen;
-    return `<div title="${c.month}: ${c.expected_lifers.toFixed(1)} expected lifers" style="flex:1;height:${h}px;background:${on?'#27ae60':'#cdd7e0'};border-radius:2px 2px 0 0"></div>`; }).join('');
-  return `<div style="margin:4px 0 10px">
-    <div class="hint" style="margin-bottom:3px">Expected lifers by start week across the year (green = chosen window):</div>
+    return `<div title="${c.month}: ${c.expected_lifers.toFixed(1)}" style="flex:1;height:${h}px;background:${on?'#27ae60':'#cdd7e0'};border-radius:2px 2px 0 0"></div>`; }).join('');
+  return `<div style="margin:4px 0 10px"><div class="hint" style="margin-bottom:3px">Expected lifers by start week (green = chosen):</div>
     <div style="display:flex;align-items:flex-end;gap:2px;height:42px">${bars}</div>
-    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mute);margin-top:1px"><span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Dec</span></div></div>`;
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mute)"><span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Dec</span></div></div>`;
 }
-function renderItinerary(plan, fit=true){
-  lastPlan=plan; itinLayer.clearLayers();
-  if(!plan.days.length){ $('results').innerHTML='<div class="hint">'+(plan.message||'No reachable hotspots.')+'</div>';
-    $('itinstatus').textContent=plan.message||'Nothing in range.'; $('birdfindwrap').style.display='none'; return; }
+function renderItinerary(plan,fit=true){
+  lastPlan=plan; itinLayer.clearLayers(); fixMap();
+  if(!plan.days.length){ $('results').innerHTML='<div class="hint">'+(plan.message||'No reachable hotspots.')+'</div>'; $('itinstatus').textContent=plan.message||'Nothing in range.'; $('birdfindwrap').style.display='none'; return; }
   const auto=plan.auto_window;
   $('itinstatus').textContent=(auto?'Best time found · ':'')+`${plan.expected_lifers_total} expected lifers over ${plan.n_days} day${plan.n_days>1?'s':''}.`;
   $('birdfindwrap').style.display='';
-  $('results').innerHTML =
-    (auto?`<div style="margin:2px 0 8px;font-size:13.5px;color:#1e7a44"><b>🗓 Best time to go:</b> starts ${plan.start_date}${plan.days[0]?.week_label?` (${plan.days[0].week_label})`:''}</div>`+windowCurveHTML(plan.window_curve, plan.start_date):'')
-    + `<div style="margin:2px 0 9px;font-size:13.5px"><b>${plan.expected_lifers_total}</b> expected lifers ·
-       ${plan.stops.length} stop${plan.stops.length>1?'s':''} · ${plan.hours_per_day??''} h/day · ${plan.n_candidate_sites} hotspot${plan.n_candidate_sites>1?'s':''} in range</div>`
+  $('results').innerHTML=
+    (auto?`<div style="margin:2px 0 8px;font-size:13.5px;color:#1e7a44"><b>🗓 Best time:</b> starts ${plan.start_date}${plan.days[0]?.week_label?` (${plan.days[0].week_label})`:''}</div>`+windowCurveHTML(plan.window_curve,plan.start_date):'')
+    + `<div style="margin:2px 0 9px;font-size:13.5px"><b>${plan.expected_lifers_total}</b> expected lifers · ${plan.stops.length} stop${plan.stops.length>1?'s':''} · ${plan.hours_per_day??''} h/day</div>`
     + plan.days.map((d,i)=> d.locality ? `
-      <div class="day" data-i="${i}">
-        <div class="num">${d.day}</div>
-        <div><h3>${d.locality}${isRestricted(d)?' <span style="color:#c0392b;font-size:11px;font-weight:600" title="Flagged restricted/limited access — verify before visiting">⚠ access</span>':''}</h3>
+      <div class="day" data-i="${i}"><div class="num">${d.day}</div>
+        <div><h3>${d.locality}${isRestricted(d)?' <span style="color:#c0392b;font-size:11px;font-weight:600">⚠ access</span>':''}</h3>
           <div class="meta">${d.week_label} · ${d.dist_km} km from base${d.revisit?' · revisit':''}</div>
-          <div class="meta"><b>+${d.expected_new}</b> new lifers (running total ${d.cumulative_expected})</div>
-        </div></div>` : `
-      <div class="day rest" data-i="${i}">
-        <div class="num">${d.day}</div>
-        <div><h3 style="color:var(--mute)">No reachable data</h3>
-          <div class="meta">${d.week_label} — try a larger radius</div></div></div>`).join('');
+          <div class="meta"><b>+${d.expected_new}</b> new lifers (running ${d.cumulative_expected})</div></div></div>` : `
+      <div class="day rest" data-i="${i}"><div class="num">${d.day}</div>
+        <div><h3 style="color:var(--mute)">No reachable data</h3><div class="meta">${d.week_label} — try a larger radius</div></div></div>`).join('');
   document.querySelectorAll('.day').forEach(el=> el.onclick=()=>showDay(+el.dataset.i));
-
-  // map: hub-and-spoke from the base to each stop, with day-numbered markers
   const b=baseMarker.getLatLng(); const pts=[[b.lat,b.lng]];
   plan.stops.forEach(s=>{ if(s.latitude==null) return;
-    L.polyline([[b.lat,b.lng],[s.latitude,s.longitude]],
-      {color:'#c0392b',weight:1.5,opacity:0.5,dashArray:'4 4'}).addTo(itinLayer);
-    L.marker([s.latitude,s.longitude],{icon:L.divIcon({className:'',
-      html:`<div class="pin" style="background:#c0392b">${s.days.join(',')}</div>`,iconSize:[24,24],iconAnchor:[12,12]})})
+    L.polyline([[b.lat,b.lng],[s.latitude,s.longitude]],{color:'#c0392b',weight:1.5,opacity:0.5,dashArray:'4 4'}).addTo(itinLayer);
+    L.marker([s.latitude,s.longitude],{icon:L.divIcon({className:'',html:`<div class="pin" style="background:#c0392b">${s.days.join(',')}</div>`,iconSize:[26,26],iconAnchor:[13,13]})})
       .addTo(itinLayer).bindTooltip(`${s.locality} — day ${s.days.join(', ')}${isRestricted(s)?' ⚠ verify access':''}`,{direction:'top'});
-    pts.push([s.latitude,s.longitude]);
-  });
+    pts.push([s.latitude,s.longitude]); });
   if(fit && pts.length>1) map.fitBounds(pts,{padding:[60,60],maxZoom:11});
-  showDay(plan.days.findIndex(d=>d.locality));   // open the first birding day
-  runBirdFind();                                 // refresh the bird-search results against this plan
+  showDay(plan.days.findIndex(d=>d.locality)); runBirdFind();
 }
-
 function runBirdFind(){
   const q=$('birdfind').value.trim().toLowerCase(), out=$('birdfindres');
   if(!q || !lastPlan){ out.innerHTML=''; return; }
   const hits=[];
   lastPlan.days.forEach((d,i)=>{ if(!d.locality) return;
-    d.birds.forEach(b=>{ if(b.common_name.toLowerCase().includes(q))
-      hits.push({i, day:d.day, locality:d.locality, name:b.common_name, p:b.p_new_here}); }); });
+    d.birds.forEach(b=>{ if(b.common_name.toLowerCase().includes(q)) hits.push({i,day:d.day,locality:d.locality,name:b.common_name,p:b.p_new_here}); }); });
   if(!hits.length){ out.innerHTML="Not in this trip's daily lists."; return; }
   hits.sort((a,b)=>b.p-a.p);
-  out.innerHTML = hits.map(h=>`<div class="findhit" data-i="${h.i}" style="cursor:pointer;margin:2px 0">
-    <b>Day ${h.day}</b> · ${Math.round(h.p*100)}% — ${h.locality} <span style="color:var(--mute)">(${h.name})</span></div>`).join('');
+  out.innerHTML=hits.map(h=>`<div class="findhit" data-i="${h.i}" style="cursor:pointer;margin:3px 0"><b>Day ${h.day}</b> · ${Math.round(h.p*100)}% — ${h.locality} <span style="color:var(--mute)">(${h.name})</span></div>`).join('');
   out.querySelectorAll('.findhit').forEach(el=> el.onclick=()=>showDay(+el.dataset.i));
 }
-$('birdfind').oninput = runBirdFind;
-
+$('birdfind').oninput=runBirdFind;
 function showDay(i){
   if(i<0 || !lastPlan) return;
   document.querySelectorAll('.day').forEach(el=> el.classList.toggle('active', +el.dataset.i===i));
@@ -709,21 +716,19 @@ function showDay(i){
   if(!d.locality){ $('detail').innerHTML='<div class="hint">Rest day — no hotspot with data in range this week.</div>'; return; }
   const cap=x=>Math.min(99,Math.max(1,Math.round(x*100)));
   const rows=sortBirds(d.birds,'p_new_here').map(b=>{ const p=cap(b.p_new_here);
-    return `<div class="bird"><span class="pct">${p}%</span>
-      <div class="bar"><span class="fill" style="width:${p}%"></span><em>${b.common_name}</em></div></div>`;
-  }).join('') || '<div class="hint">Nothing new expected here.</div>';
-  const hasTax = d.birds.some(b=>b.taxon_order!=null);
+    return `<div class="bird"><span class="pct">${p}%</span><div class="bar"><span class="fill" style="width:${p}%"></span><em>${b.common_name}</em></div></div>`; }).join('') || '<div class="hint">Nothing new expected here.</div>';
+  const hasTax=d.birds.some(b=>b.taxon_order!=null);
   $('detail').innerHTML=`<h2 style="margin:0 0 2px;font-size:15px">Day ${d.day}: ${d.locality}</h2>
-    <div class="meta" style="color:var(--mute);font-size:12.5px">${d.date} · ${d.week_label} · ${d.dist_km} km from base
-      · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">eBird ↗</a></div>
-    ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ ${d.restricted?"Name suggests restricted/limited access (permit, private, military, tour-only…) — a heuristic guess, verify before visiting.":"You've marked this hotspot restricted."}</div>`:''}
-    <div style="margin:4px 0 6px"><a href="#" class="ebird" onclick="event.preventDefault();toggleRestricted('${d.locality_id}')">${userRestricted.has(d.locality_id)?'✓ marked restricted — click to unmark':'🚫 mark this hotspot restricted'}</a></div>
+    <div class="meta" style="color:var(--mute);font-size:12.5px">${d.date} · ${d.week_label} · ${d.dist_km} km · <a class="ebird" href="https://ebird.org/hotspot/${d.locality_id}" target="_blank" rel="noopener">eBird ↗</a></div>
+    ${isRestricted(d)?`<div class="hint" style="color:#c0392b;margin:5px 0">⚠ verify access before visiting.</div>`:''}
     <div style="margin:8px 0 4px;font-size:14px"><b>+${d.expected_new}</b> expected new lifers this day</div>
-    <div class="hint" style="margin-bottom:8px">Most likely new birds here, discounting what you've probably already seen earlier in the trip:</div>
-    ${hasTax?sortToggle():''}
-    ${rows}`;
-  _rerenderBirds = ()=>showDay(i);
+    <div class="hint" style="margin-bottom:8px">Most likely new birds here, discounting earlier days:</div>
+    ${hasTax?sortToggle():''}${rows}`;
+  _rerenderBirds=()=>showDay(i);
+  if(window.innerWidth<860) $('map').scrollIntoView({behavior:'smooth',block:'start'});
 }
+
+goStep(1);
 </script>
 </body>
 </html>
