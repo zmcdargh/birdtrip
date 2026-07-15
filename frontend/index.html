@@ -183,50 +183,70 @@
     </div>
 
     <!-- ================= PLAN A TRIP (kept as its own mode) ================= -->
+    <!-- ================= PLAN A TRIP WIZARD ================= -->
     <div id="itinCtls" style="display:none">
-      <div class="fld">
-        <label>Base camp</label>
-        <div id="baseinfo" class="hint">Tap the map to drop your base — we'll plan day trips around it. Or hit Plan with no pin to find the best trips anywhere.</div>
-      </div>
-      <div class="fld">
-        <label>Which birds? <span class="hint">(optional)</span></label>
-        <div id="targetchips2" class="chips"></div>
-        <div class="tcwrap">
-          <input type="text" id="targetinput2" autocomplete="off" placeholder="Limit to these birds…"/>
-          <div id="targetdrop2" class="drop" style="display:none"></div>
+      <div class="dots"><span class="dot" data-p="1"></span><span class="dot" data-p="2"></span><span class="dot" data-p="3"></span></div>
+
+      <!-- Step 1: which birds -->
+      <div class="stepcard" id="pstep1">
+        <div class="steptitle">Which birds?</div>
+        <div class="stepsub">Chase specific birds, or plan for all your lifers. Your life list from Find spots still applies.</div>
+        <div class="fld">
+          <label>Target birds <span class="hint">(optional)</span></label>
+          <div id="targetchips2" class="chips"></div>
+          <div class="tcwrap">
+            <input type="text" id="targetinput2" autocomplete="off" placeholder="Limit the trip to these birds…"/>
+            <div id="targetdrop2" class="drop" style="display:none"></div>
+          </div>
         </div>
-        <div class="hint" style="margin-top:4px">Life list from the Find-spots tab still applies.</div>
+        <div class="navrow"><button class="btn primary" id="pn1">Next →</button></div>
       </div>
-      <div class="fld">
-        <label>Day-trip radius: <span class="val" id="radval">75 km</span></label>
-        <input type="range" id="radius" min="10" max="300" step="5" value="75"/>
+
+      <!-- Step 2: base + range -->
+      <div class="stepcard" id="pstep2" style="display:none">
+        <div class="steptitle">Where's your base?</div>
+        <div class="stepsub">Tap the map below to drop your base camp — we plan day trips around it. Or skip, and we'll find the best trips anywhere.</div>
+        <div id="baseinfo" class="hint">No base set — we'll search anywhere.</div>
+        <div class="fld" style="margin-top:14px">
+          <label>Day-trip radius: <span class="val" id="radval">75 km</span></label>
+          <input type="range" id="radius" min="10" max="300" step="5" value="75"/>
+          <div class="hint">How far you'll range from base each day.</div>
+        </div>
+        <div class="navrow"><button class="btn" id="pb2">← Back</button><button class="btn primary" id="pn2">Next →</button></div>
       </div>
-      <div class="fld">
-        <label>Trip start</label>
-        <input type="date" id="startdate"/>
-        <label style="display:block;margin-top:8px;font-size:13px;color:var(--mute);font-weight:400;cursor:pointer">
-          <input type="checkbox" id="autowindow"/> Find the best time for me</label>
-      </div>
-      <div class="fld">
-        <label>Trip length: <span class="val" id="dayval">5 days</span></label>
-        <input type="range" id="ndays" min="1" max="14" step="1" value="5"/>
-      </div>
-      <div class="fld">
-        <label>Hours of birding per day: <span class="val" id="effval">4 h</span></label>
-        <input type="range" id="kday" min="1" max="12" step="1" value="4"/>
-      </div>
-      <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <input type="checkbox" id="exclrestrict"/> Exclude restricted-access spots</label>
-      <button id="plan" class="btn go" type="button" style="width:100%">Plan trip</button>
-      <div id="itinstatus" class="hint" style="margin-top:8px"></div>
-      <div class="fld" id="birdfindwrap" style="display:none;margin-top:14px">
-        <label>Find a bird in this trip <span class="hint">(which day?)</span></label>
-        <input type="text" id="birdfind" autocomplete="off" placeholder="e.g. Red-cockaded Woodpecker"/>
-        <div id="birdfindres" class="hint" style="margin-top:6px"></div>
+
+      <!-- Step 3: when + how long -->
+      <div class="stepcard" id="pstep3" style="display:none">
+        <div class="steptitle">When &amp; how long?</div>
+        <div class="stepsub">Set your dates and daily effort, then plan the trip.</div>
+        <div class="fld">
+          <label>Trip start</label>
+          <input type="date" id="startdate"/>
+          <label style="display:block;margin-top:8px;font-size:13px;color:var(--mute);font-weight:400;cursor:pointer">
+            <input type="checkbox" id="autowindow"/> Find the best time for me</label>
+        </div>
+        <div class="fld">
+          <label>Trip length: <span class="val" id="dayval">5 days</span></label>
+          <input type="range" id="ndays" min="1" max="14" step="1" value="5"/>
+        </div>
+        <div class="fld">
+          <label>Hours of birding per day: <span class="val" id="effval">4 h</span></label>
+          <input type="range" id="kday" min="1" max="12" step="1" value="4"/>
+        </div>
+        <label style="font-weight:400;font-size:13px;display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <input type="checkbox" id="exclrestrict"/> Exclude restricted-access spots</label>
+        <div class="navrow"><button class="btn" id="pb3">← Back</button><button id="plan" class="btn go" type="button">Plan trip</button></div>
+        <div id="itinstatus" class="hint" style="margin-top:8px"></div>
       </div>
     </div>
 
+    <a id="newplan" class="link" style="display:none;margin-bottom:8px" onclick="newPlan()">← New plan</a>
     <div id="results"></div>
+    <div class="fld" id="birdfindwrap" style="display:none;margin-top:14px">
+      <label>Find a bird in this trip <span class="hint">(which day?)</span></label>
+      <input type="text" id="birdfind" autocomplete="off" placeholder="e.g. Red-cockaded Woodpecker"/>
+      <div id="birdfindres" class="hint" style="margin-top:6px"></div>
+    </div>
   </div>
 
   <div id="right">
@@ -241,7 +261,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://leafletjs.com/examples/choropleth/us-states.js"></script>
 <script>
-const state = { mode:'search', step:1, lifeList:[], weeks:null, alpha:0, regions:new Set(), targets:[], searchStates:null, hasSearched:false };
+const state = { mode:'search', step:1, planStep:1, lifeList:[], weeks:null, alpha:0, regions:new Set(), targets:[], searchStates:null, hasSearched:false };
 const SPOT_HOURS = 4;   // Find-spots assumes a half-day (~4 h) of birding — nobody takes a trip for 1 h,
                         // and ranking at 1 h over-credits quick pond scans and buries long migrant walks.
 const map = L.map('map',{tap:true}).setView([39.5,-98.35],4);
@@ -366,7 +386,7 @@ function renderStateChips(){
 function goStep(n){
   state.step=n;
   [1,2,3].forEach(i=>{ $('step'+i).style.display = i===n?'':'none'; });
-  document.querySelectorAll('.dot').forEach(d=>{ const s=+d.dataset.s;
+  document.querySelectorAll('#wiz .dot').forEach(d=>{ const s=+d.dataset.s;
     d.classList.toggle('on', s===n); d.classList.toggle('done', s<n); });
   if(n===3){ fixMap(); renderStateChips(); status(state.regions.size? '':'Tap the state(s) you\'ll bird in on the map.'); }
 }
@@ -388,6 +408,26 @@ function showSearchStage(which){
   if(which==='wizard'){ $('results').innerHTML=''; goStep(state.step); }
 }
 function newSearch(){ showSearchStage('wizard'); goStep(1); }
+
+// ---- Plan-a-trip wizard (mirrors the Find-spots one) ----
+function goPlanStep(n){
+  state.planStep=n;
+  [1,2,3].forEach(i=>{ $('pstep'+i).style.display = i===n?'':'none'; });
+  document.querySelectorAll('#itinCtls .dot').forEach(d=>{ const s=+d.dataset.p;
+    d.classList.toggle('on', s===n); d.classList.toggle('done', s<n); });
+  if(n===2) fixMap();
+}
+$('pn1').onclick=()=>goPlanStep(2);
+$('pb2').onclick=()=>goPlanStep(1);
+$('pn2').onclick=()=>goPlanStep(3);
+$('pb3').onclick=()=>goPlanStep(2);
+// toggle between the plan wizard and the trip results
+function showPlanStage(which){
+  $('itinCtls').style.display = which==='wizard' ? '' : 'none';
+  $('newplan').style.display  = which==='results' ? '' : 'none';
+  if(which==='wizard'){ $('results').innerHTML=''; $('birdfindwrap').style.display='none'; goPlanStep(state.planStep); }
+}
+function newPlan(){ showPlanStage('wizard'); goPlanStep(1); }
 
 let reqSeq=0;
 async function runRecommend(){
@@ -534,12 +574,13 @@ function setMode(m){
   $('tabSearch').classList.toggle('on', m==='search');
   $('tabItin').classList.toggle('on', m==='itinerary');
   $('wiz').style.display = m==='search' ? '' : 'none';
-  $('itinCtls').style.display = m==='itinerary' ? '' : 'none';
-  $('results').innerHTML=''; renderChips(); fixMap();
+  renderChips(); fixMap();
   if(m==='itinerary'){
     recLayer.clearLayers();
-    $('detail').innerHTML='<div class="hint">Tap the map to drop your base, set your dates, and Plan trip.</div>';
+    if(lastPlan){ renderItinerary(lastPlan, false); }     // resume a plan already made this session
+    else { showPlanStage('wizard'); $('detail').innerHTML='<div class="hint">Set up your trip on the left, then Plan.</div>'; }
   } else {
+    $('itinCtls').style.display='none'; $('newplan').style.display='none'; $('birdfindwrap').style.display='none';
     itinLayer.clearLayers();
     if(baseMarker){ map.removeLayer(baseMarker); baseMarker=null; }
     if(baseCircle){ map.removeLayer(baseCircle); baseCircle=null; }
@@ -619,6 +660,7 @@ $('plan').onclick=async ()=>{
   if(!baseMarker){ return runBestTrips(); }
   const auto=$('autowindow').checked;
   if(!auto && !$('startdate').value){ $('itinstatus').textContent='⚠ Pick a start date, or check "Find the best time for me".'; return; }
+  showPlanStage('results');
   const my=++planSeq;
   $('plan').disabled=true; $('plan').textContent=auto?'Finding the best time…':'Planning…';
   $('results').innerHTML='<div class="loading"><div class="spin"></div>'+(auto?'Searching the year for the best window…':'Planning your trip…')+'</div>';
@@ -635,6 +677,7 @@ $('plan').onclick=async ()=>{
 
 let lastBest=null;
 async function runBestTrips(){
+  showPlanStage('results');
   const my=++planSeq;
   $('plan').disabled=true; $('plan').textContent='Finding best trips…';
   $('results').innerHTML='<div class="loading"><div class="spin"></div>Finding the most rewarding trips… (this one takes a moment)</div>';
@@ -648,6 +691,7 @@ async function runBestTrips(){
   finally{ if(my===planSeq){ $('plan').disabled=false; $('plan').textContent='Plan trip'; } }
 }
 function renderBestTrips(r){
+  if(state.mode==='itinerary') showPlanStage('results');
   lastBest=r; const trips=r.trips||[]; $('birdfindwrap').style.display='none'; fixMap();
   if(!trips.length){ $('results').innerHTML='<div class="hint">No trips found — try a larger radius or more days.</div>'; $('itinstatus').textContent='No trips found.'; return; }
   const medals=['🥇','🥈','🥉'];
@@ -674,6 +718,7 @@ function windowCurveHTML(curve,chosen){
     <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--mute)"><span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Dec</span></div></div>`;
 }
 function renderItinerary(plan,fit=true){
+  if(state.mode==='itinerary') showPlanStage('results');
   lastPlan=plan; itinLayer.clearLayers(); fixMap();
   if(!plan.days.length){ $('results').innerHTML='<div class="hint">'+(plan.message||'No reachable hotspots.')+'</div>'; $('itinstatus').textContent=plan.message||'Nothing in range.'; $('birdfindwrap').style.display='none'; return; }
   const auto=plan.auto_window;
