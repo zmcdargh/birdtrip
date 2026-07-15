@@ -100,22 +100,32 @@ def _has_lambda(store: Store) -> bool:
     return "lambda_hr" in _store_cols(store)
 
 
-def _pdetect_sql(hours, k, has_lambda) -> str:
-    """SQL fragment for P(detect | present). Per-row fallback to the k-model where lambda_hr is NULL."""
+def _pdetect_sql(hours, k, has_lambda, dur=False) -> str:
+    """SQL fragment for P(detect | present). If dur=True the birding time is each cell's OWN mean
+    checklist duration (mean_dur_min) rather than a fixed `hours` — so the score reflects a typical
+    visit to that site (this is what the Find-spots ranking wants; validated at r≈0.96 vs observed
+    species/checklist). Falls back to `hours` where mean_dur_min is NULL, and to the k-model where
+    lambda_hr is NULL."""
     if has_lambda:
         h = float(hours); kfb = max(1, int(round(h)))
-        return (f"(1 - CASE WHEN lambda_hr IS NOT NULL THEN exp(-lambda_hr*{h}) "
+        t = f"(COALESCE(mean_dur_min, {h*60.0})/60.0)" if dur else f"{h}"
+        return (f"(1 - CASE WHEN lambda_hr IS NOT NULL THEN exp(-lambda_hr*{t}) "
                 f"ELSE pow(1 - detect_given_present, {kfb}) END)")
     return f"(1 - pow(1 - detect_given_present, {int(k)}))"
 
 
-def _pdetect(df: pd.DataFrame, hours, k, has_lambda):
-    """Vectorized P(detect | present) over a frame (numpy array). Mirrors _pdetect_sql."""
+def _pdetect(df: pd.DataFrame, hours, k, has_lambda, dur=False):
+    """Vectorized P(detect | present) over a frame (numpy array). Mirrors _pdetect_sql, incl. the
+    dur=True per-row mean-checklist-duration mode."""
     if has_lambda and "lambda_hr" in df.columns:
         h = float(hours); kfb = max(1, int(round(h)))
+        if dur and "mean_dur_min" in df.columns:
+            t = pd.to_numeric(df["mean_dur_min"], errors="coerce").fillna(h * 60.0) / 60.0
+        else:
+            t = h
         lam = pd.to_numeric(df["lambda_hr"], errors="coerce")
         dgp = df["detect_given_present"].astype(float)
-        return np.where(lam.notna(), 1 - np.exp(-lam.fillna(0.0) * h), 1 - (1 - dgp) ** kfb)
+        return np.where(lam.notna(), 1 - np.exp(-lam.fillna(0.0) * t), 1 - (1 - dgp) ** kfb)
     return (1 - (1 - df["detect_given_present"].astype(float)) ** int(k)).to_numpy()
 
 
@@ -179,7 +189,7 @@ def species_search(store: Store, q: str, limit: int = 12) -> list[dict]:
 
 
 def _cell_scores(pq, alpha, k, states=None, weeks=None, life_list=(), locality_ids=None,
-                 targets=None, hours=None, has_lambda=False) -> pd.DataFrame:
+                 targets=None, hours=None, has_lambda=False, dur=False) -> pd.DataFrame:
     """Per-(hotspot, week) score, computed in DuckDB over the Parquet. Returns a small frame.
     `targets` restricts the candidate species to those (search FOR those birds); otherwise the
     candidate pool is all species minus the life list."""
@@ -194,7 +204,7 @@ def _cell_scores(pq, alpha, k, states=None, weeks=None, life_list=(), locality_i
         where.append(f"species_code IN {_inlist(targets)}")
     elif life_list:
         where.append(f"species_code NOT IN {_inlist(life_list)}")
-    pdet = _pdetect_sql(k if hours is None else hours, k, has_lambda)
+    pdet = _pdetect_sql(k if hours is None else hours, k, has_lambda, dur=dur)
     sql = (f"SELECT locality_id, week, SUM(pow(w,{float(alpha)}) * occupancy * {pdet}) AS score "
            f"FROM '{pq}' WHERE {' AND '.join(where)} GROUP BY locality_id, week")
     return _q(sql)
@@ -395,9 +405,13 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
         hours = float(k)
     pq = _parquet(store)
     if pq:   # scalable path: score in DuckDB over Parquet, fetch details for top hotspots only
+        # Rank at each hotspot's TYPICAL checklist duration (not a fixed `hours`) when the store
+        # carries mean_dur_min — "expected species on a normal visit here", which matches observed
+        # species/checklist and stops the 1-hour default from burying slow-to-bird migrant spots.
+        use_dur = has_lambda and "mean_dur_min" in _store_cols(store)
         return _recommend_via_parquet(store, pq, list(life_list), states or ([state] if state else None),
                                       weeks, k, alpha, occ_gate, topn, targets, hours, has_lambda,
-                                      exclude_restricted, ur)
+                                      exclude_restricted, ur, dur=use_dur)
 
     region = _slice(store, occ_gate, states=states, state=state, county=county, weeks=weeks)
     if region.empty:
@@ -477,19 +491,20 @@ def recommend_trips(store: Store, life_list=(), states=None, state=None, county=
 
 
 def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_gate, topn, targets=None,
-                           hours=None, has_lambda=False, exclude_restricted=False, user_restricted=None):
+                           hours=None, has_lambda=False, exclude_restricted=False, user_restricted=None,
+                           dur=False):
     if hours is None:
         hours = float(k)
     ur = set(user_restricted or [])
     cs = _cell_scores(pq, alpha, k, states=states, weeks=weeks, life_list=life_list, targets=targets,
-                      hours=hours, has_lambda=has_lambda)
+                      hours=hours, has_lambda=has_lambda, dur=dur)
     if cs.empty:
         return []
     # take a buffer beyond topn so excluding restricted hotspots still leaves a full list
     peaks = cs.loc[cs.groupby("locality_id")["score"].idxmax()].sort_values("score", ascending=False).head(topn + 40)
     top_ids = peaks["locality_id"].tolist()
     full = _cell_scores(pq, alpha, k, states=states, life_list=life_list, locality_ids=top_ids,
-                        targets=targets, hours=hours, has_lambda=has_lambda)  # full-year curves
+                        targets=targets, hours=hours, has_lambda=has_lambda, dur=dur)  # full-year curves
     curves = {}
     for lid, g in full.groupby("locality_id"):
         wk = [0.0] * 48
@@ -502,10 +517,11 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
     else:
         ll = f"AND species_code NOT IN {_inlist(life_list)}" if life_list else ""
     lamcol = ", lambda_hr" if has_lambda else ""
+    durcol = ", mean_dur_min" if dur else ""            # needed to score each hotspot at its own duration
     stpred = f" AND state IN {_inlist(states)}" if states else ""   # prune to chosen state(s)
     detail = _q(
         f"SELECT locality, locality_id, state, week, species_code, common_name, occupancy, "
-        f"detect_given_present, det_a, det_b, p_lifer_1, w, latitude, longitude{lamcol} FROM '{pq}' "
+        f"detect_given_present, det_a, det_b, p_lifer_1, w, latitude, longitude{lamcol}{durcol} FROM '{pq}' "
         f"WHERE locality_id IN {_inlist(top_ids)} AND trusted=1{stpred} {ll}")
     out = []
     for prow in peaks.itertuples():
@@ -520,7 +536,7 @@ def _recommend_via_parquet(store, pq, life_list, states, weeks, k, alpha, occ_ga
         restricted = _itin._restricted(rows.iloc[0].locality) or (lid in ur)
         if exclude_restricted and restricted:
             continue
-        rows["p_eff"] = _calibrate(rows["occupancy"].astype(float) * _pdetect(rows, hours, k, has_lambda), store)
+        rows["p_eff"] = _calibrate(rows["occupancy"].astype(float) * _pdetect(rows, hours, k, has_lambda, dur=dur), store)
         rows["contrib"] = (rows["w"] ** alpha) * rows["p_eff"]
         rows = rows.sort_values("contrib", ascending=False)
         birds = [{
@@ -915,6 +931,11 @@ def trip_summary(store: Store, locality_id: str, week: int, k=6, life_list=(), h
     else:
         cell = _slice(store, 0.5, locality_id=locality_id, weeks=[week])
         cell = cell[~cell["species_code"].isin(set(life_list))] if not cell.empty else cell
+    # Score a TYPICAL visit to this hotspot: use its own mean checklist duration as the effort
+    # (matches the Find-spots ranking and observed species/checklist), overriding the passed `hours`.
+    if not cell.empty and has_lambda and "mean_dur_min" in cell.columns \
+            and pd.notna(cell["mean_dur_min"].iloc[0]) and float(cell["mean_dur_min"].iloc[0]) > 0:
+        hours = float(cell["mean_dur_min"].iloc[0]) / 60.0
     if not cell.empty:
         cell["p_trip"] = _calibrate(cell["occupancy"].astype(float) * _pdetect(cell, hours, k, has_lambda), store)
     cell = cell[cell["p_trip"] > 0.001].sort_values("p_trip", ascending=False) if not cell.empty else cell
