@@ -19,12 +19,14 @@ def main():
     ap.add_argument("--store", required=True)
     ap.add_argument("--state", required=True)
     ap.add_argument("--month", type=int, required=True, help="1-12")
+    ap.add_argument("--hours", type=float, default=1.0, help="hours of birding assumed in the score")
     ap.add_argument("--look", nargs="*", default=["central park", "doodletown", "montezuma"],
                     help="substrings of hotspot names to locate in the ranking")
     a = ap.parse_args()
     weeks = ",".join(str(w) for w in MONTH_WEEKS(a.month))
     con = duckdb.connect()
-    pdet = "(1 - CASE WHEN lambda_hr IS NOT NULL THEN exp(-lambda_hr) ELSE (1-detect_given_present) END)"
+    h = float(a.hours); kfb = max(1, round(h))
+    pdet = f"(1 - CASE WHEN lambda_hr IS NOT NULL THEN exp(-lambda_hr*{h}) ELSE pow(1-detect_given_present,{kfb}) END)"
     con.execute(f"""CREATE TEMP TABLE rk AS
       WITH cell AS (
         SELECT locality_id, any_value(locality) loc, week,
