@@ -74,7 +74,7 @@ def main():
         df = con.execute(f"""SELECT rank, round(model,1) model, round(model_dur,1) model_dur, round(occ_sum,1) occ_sum,
                                     round(emp,1) emp, chk, round(dur) dur_min, yrs, locality
                               FROM rk WHERE lower(locality) LIKE '%{name.lower()}%'
-                              ORDER BY model DESC LIMIT 4""").df()
+                              ORDER BY chk DESC LIMIT 4""").df()   # most-birded (the umbrella hotspot) first
         print(f"\n  '{name}':")
         print(df.to_string(index=False) if len(df) else "    (none)")
 
