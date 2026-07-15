@@ -155,9 +155,9 @@
           </div>
         </div>
         <div class="fld">
-          <label>Emphasize local rarities: <span class="val" id="aval">0.0</span></label>
-          <input type="range" id="alpha" min="0" max="1" step="0.1" value="0"/>
-          <div class="hint">0 = most birds overall · 1 = up-weight birds that are hard to get elsewhere</div>
+          <label style="font-weight:400;font-size:13.5px;display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="rarities"/> Emphasize local rarities</label>
+          <div class="hint">On: up-weight birds that are hard to get elsewhere. Off: just the most birds overall.</div>
         </div>
         <div class="navrow"><button class="btn primary" id="n1">Next →</button></div>
       </div>
@@ -176,8 +176,8 @@
         <div class="stepsub">Tap the map below to drop your base camp — we plan day trips around it. Or skip, and we'll find the best trips anywhere.</div>
         <div id="baseinfo" class="hint">No base set — we'll search anywhere.</div>
         <div class="fld" style="margin-top:14px">
-          <label>Day-trip radius: <span class="val" id="radval">75 km</span></label>
-          <input type="range" id="radius" min="10" max="300" step="5" value="75"/>
+          <label>Day-trip radius: <span class="val" id="radval">30 mi</span></label>
+          <input type="range" id="radius" min="5" max="60" step="5" value="30"/>
           <div class="hint">How far you'll range from base each day.</div>
         </div>
         <div class="navrow"><button class="btn" id="pb2">← Back</button><button class="btn primary" id="pn2">Next →</button></div>
@@ -276,7 +276,7 @@ function selectedWeeks(){
 MONTHS.forEach((name,i)=>{ const b=document.createElement('button'); b.textContent=name; b.dataset.m=i;
   b.onclick=()=>{ b.classList.toggle('on'); state.weeks=selectedWeeks(); }; $('months').appendChild(b); });
 
-$('alpha').oninput = e=>{ state.alpha=+e.target.value; $('aval').textContent=state.alpha.toFixed(1); };
+$('rarities').onchange = e=>{ state.alpha = e.target.checked ? 0.5 : 0; };
 
 // ---------- target-species autocomplete (works for both find-spots & plan tabs) ----------
 function renderChips(){
@@ -416,9 +416,8 @@ function renderResults(recs){
   lastRecs=recs; recLayer.clearLayers(); recMarkers=[]; fixMap();
   const head = `<div class="optbar">
       <span style="flex:1"></span>
-      <label style="font-size:12px;color:var(--mute)">rarities</label>
-      <input type="range" id="alpha2" min="0" max="1" step="0.1" value="${state.alpha}" style="width:110px;height:20px"/>
-      <span class="val" id="aval2">${state.alpha.toFixed(1)}</span></div>`;
+      <label style="font-size:12.5px;color:var(--mute);display:flex;align-items:center;gap:6px">
+        <input type="checkbox" id="rarities2" ${state.alpha>0?'checked':''}/> emphasize rarities</label></div>`;
   if(!recs.length){ $('results').innerHTML=head+'<div class="hint">No hotspots for that selection — try different states or months.</div>'; wireAlpha2(); return; }
   const maxS=Math.max(...recs.map(d=>d.score))||1;
   $('results').innerHTML = head + recs.map((d,i)=>{
@@ -443,10 +442,8 @@ function renderResults(recs){
   renderCurves(recs);
 }
 function wireAlpha2(){
-  const a=$('alpha2'); if(!a) return;
-  a.oninput=e=>{ state.alpha=+e.target.value; $('aval2').textContent=state.alpha.toFixed(1);
-    $('alpha').value=state.alpha; $('aval').textContent=state.alpha.toFixed(1); };
-  a.onchange=()=> runRecommend();
+  const a=$('rarities2'); if(!a) return;
+  a.onchange=e=>{ state.alpha=e.target.checked?0.5:0; if($('rarities')) $('rarities').checked=e.target.checked; runRecommend(); };
 }
 
 const CURVE_COLORS=['#c0392b','#2c6fa6','#27ae60','#e67e22','#8e44ad','#16a085','#d35400','#2980b9','#c2185b','#607d8b','#00838f','#7cb342'];
@@ -572,10 +569,10 @@ async function applyAsk(cfg){
   if(cfg.unresolved_birds && cfg.unresolved_birds.length) notes.push("couldn't match: "+cfg.unresolved_birds.join(', '));
   $('askstatus').textContent=notes.join(' · ')||'Done.';
   const t=(cfg.targets||[]); const ur=[...userRestricted];
-  if(cfg.alpha!=null){ state.alpha=+cfg.alpha; $('alpha').value=cfg.alpha; $('aval').textContent=(+cfg.alpha).toFixed(1); }
+  if(cfg.alpha!=null){ state.alpha=+cfg.alpha; if($('rarities')) $('rarities').checked=state.alpha>0; }
   if(cfg.n_days!=null){ $('ndays').value=cfg.n_days; $('dayval').textContent=cfg.n_days+(cfg.n_days==1?' day':' days'); }
   if(cfg.hours_per_day!=null){ $('kday').value=cfg.hours_per_day; $('effval').textContent=cfg.hours_per_day+' h'; }
-  if(cfg.radius_km!=null){ $('radius').value=cfg.radius_km; $('radval').textContent=cfg.radius_km+' km'; if(baseCircle) baseCircle.setRadius(cfg.radius_km*1000); }
+  if(cfg.radius_km!=null){ const mi=Math.round(cfg.radius_km/MI2KM); $('radius').value=mi; $('radval').textContent=mi+' mi'; if(baseCircle) baseCircle.setRadius(cfg.radius_km*1000); }
   const loading=m=>$('results').innerHTML='<div class="loading"><div class="spin"></div>'+m+'</div>';
   if(cfg.mode==='find_spots'){
     setMode('search'); showStage('results'); state.hasSearched=true; loading('Finding spots…');
@@ -584,7 +581,7 @@ async function applyAsk(cfg){
     renderResults(await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   } else if(cfg.mode==='plan_trip'){
     setMode('itinerary'); setBase(L.latLng(cfg.base_lat,cfg.base_lon)); map.setView([cfg.base_lat,cfg.base_lon],8); loading('Planning…');
-    const body={ base_lat:cfg.base_lat, base_lon:cfg.base_lon, radius_km:cfg.radius_km||+$('radius').value,
+    const body={ base_lat:cfg.base_lat, base_lon:cfg.base_lon, radius_km:cfg.radius_km||(+$('radius').value*MI2KM),
       n_days:cfg.n_days||+$('ndays').value, hours_per_day:cfg.hours_per_day||+$('kday').value, alpha:cfg.alpha??0,
       life_list:state.lifeList, targets:t.length?t:null, exclude_restricted:false, user_restricted:ur };
     if(!cfg.auto_time && cfg.week){ body.start_date=askWk2date(cfg.week); $('startdate').value=body.start_date; $('autowindow').checked=false; $('startdate').disabled=false; }
@@ -592,15 +589,16 @@ async function applyAsk(cfg){
     renderItinerary(await getJSON('/itinerary',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   } else {
     setMode('itinerary'); loading('Finding the best trips…');
-    const body={ n_days:cfg.n_days||+$('ndays').value, hours_per_day:cfg.hours_per_day||+$('kday').value, radius_km:+$('radius').value,
+    const body={ n_days:cfg.n_days||+$('ndays').value, hours_per_day:cfg.hours_per_day||+$('kday').value, radius_km:+$('radius').value*MI2KM,
       alpha:cfg.alpha??0, n_trips:3, week:cfg.week||null, states:cfg.states||null,
       life_list:state.lifeList, targets:t.length?t:null, exclude_restricted:false, user_restricted:ur };
     renderBestTrips(await getJSON('/best_trips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   }
 }
 
-const radiusM=()=>(+$('radius').value)*1000;
-$('radius').oninput=e=>{ $('radval').textContent=e.target.value+' km'; if(baseCircle) baseCircle.setRadius(radiusM()); };
+const MI2KM=1.60934;
+const radiusM=()=>(+$('radius').value)*MI2KM*1000;         // slider is MILES; map circle wants metres
+$('radius').oninput=e=>{ $('radval').textContent=e.target.value+' mi'; if(baseCircle) baseCircle.setRadius(radiusM()); };
 $('ndays').oninput=e=>$('dayval').textContent=e.target.value+(e.target.value==1?' day':' days');
 $('kday').oninput=e=>$('effval').textContent=e.target.value+' h';
 
@@ -628,7 +626,7 @@ $('plan').onclick=async ()=>{
   $('plan').disabled=true; $('plan').textContent=auto?'Finding the best time…':'Planning…';
   $('results').innerHTML='<div class="loading"><div class="spin"></div>'+(auto?'Searching the year for the best window…':'Planning your trip…')+'</div>';
   const b=baseMarker.getLatLng(); const targets=state.targets.map(t=>t.code);
-  const body={ base_lat:b.lat, base_lon:b.lng, radius_km:+$('radius').value, n_days:+$('ndays').value, hours_per_day:+$('kday').value,
+  const body={ base_lat:b.lat, base_lon:b.lng, radius_km:+$('radius').value*MI2KM, n_days:+$('ndays').value, hours_per_day:+$('kday').value,
     alpha:state.alpha, life_list:state.lifeList, targets:(targets.length?targets:null),
     exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
   if(!auto) body.start_date=$('startdate').value;
@@ -645,7 +643,7 @@ async function runBestTrips(){
   $('plan').disabled=true; $('plan').textContent='Finding best trips…';
   $('results').innerHTML='<div class="loading"><div class="spin"></div>Finding the most rewarding trips… (this one takes a moment)</div>';
   const targets=state.targets.map(t=>t.code);
-  const body={ n_days:+$('ndays').value, hours_per_day:+$('kday').value, radius_km:+$('radius').value,
+  const body={ n_days:+$('ndays').value, hours_per_day:+$('kday').value, radius_km:+$('radius').value*MI2KM,
     alpha:state.alpha, n_trips:3, states:state.searchStates, life_list:state.lifeList,
     targets:(targets.length?targets:null), exclude_restricted:$('exclrestrict').checked, user_restricted:[...userRestricted] };
   try{ const r=await getJSON('/best_trips',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
