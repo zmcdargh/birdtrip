@@ -242,6 +242,8 @@
 <script src="https://leafletjs.com/examples/choropleth/us-states.js"></script>
 <script>
 const state = { mode:'search', step:1, lifeList:[], weeks:null, alpha:0, regions:new Set(), targets:[], searchStates:null, hasSearched:false };
+const SPOT_HOURS = 4;   // Find-spots assumes a half-day (~4 h) of birding — nobody takes a trip for 1 h,
+                        // and ranking at 1 h over-credits quick pond scans and buries long migrant walks.
 const map = L.map('map',{tap:true}).setView([39.5,-98.35],4);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
   {subdomains:'abcd', attribution:'© OpenStreetMap © CARTO', maxZoom:19}).addTo(map);
@@ -394,7 +396,7 @@ async function runRecommend(){
   $('results').innerHTML='<div class="loading"><div class="spin"></div>'
     + (targets.length?'Finding your target birds…':'Finding the best spots…') + '</div>';
   const body={ life_list:state.lifeList, targets:(targets.length?targets:null), states:state.searchStates,
-               weeks:state.weeks, k:1, hours:1, alpha:state.alpha, topn:12,
+               weeks:state.weeks, k:1, hours:SPOT_HOURS, alpha:state.alpha, topn:12,
                exclude_restricted:$('exclrestrict_s').checked, user_restricted:[...userRestricted] };
   try{
     const recs=await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -493,7 +495,7 @@ async function showDetail(d){
   $('detail').innerHTML='<div class="hint">Loading…</div>';
   try{
     const s=await getJSON('/summary',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({locality_id:d.locality_id, week:d.week, hours:1, life_list:state.lifeList})});
+      body:JSON.stringify({locality_id:d.locality_id, week:d.week, hours:SPOT_HOURS, life_list:state.lifeList})});
     const cap=x=>Math.min(99,Math.max(1,Math.round(x*100)));
     const render=()=>{
       const rows=sortBirds(s.birds,'p_trip').map(b=>{ const p=cap(b.p_trip),lo=cap(b.p_low??b.p_trip),hi=cap(b.p_high??b.p_trip);
@@ -574,7 +576,7 @@ async function applyAsk(cfg){
   if(cfg.mode==='find_spots'){
     setMode('search'); showSearchStage('results'); state.hasSearched=true; loading('Finding spots…');
     const body={ life_list:state.lifeList, targets:t.length?t:null, states:cfg.states||null, weeks:cfg.week?[cfg.week]:null,
-      k:1, hours:1, alpha:cfg.alpha??0, topn:12, exclude_restricted:false, user_restricted:ur };
+      k:1, hours:SPOT_HOURS, alpha:cfg.alpha??0, topn:12, exclude_restricted:false, user_restricted:ur };
     renderResults(await getJSON('/recommend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}));
   } else if(cfg.mode==='plan_trip'){
     setMode('itinerary'); setBase(L.latLng(cfg.base_lat,cfg.base_lon)); map.setView([cfg.base_lat,cfg.base_lon],8); loading('Planning…');
