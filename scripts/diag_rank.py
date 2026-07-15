@@ -28,18 +28,20 @@ def main():
     con.execute(f"""CREATE TEMP TABLE rk AS
       WITH cell AS (
         SELECT locality_id, any_value(locality) loc, week,
-               SUM(occupancy*{pdet}) score, COUNT(*) n_species, any_value(n_checklists) chk
+               SUM(occupancy*{pdet}) score, COUNT(*) n_species,
+               any_value(n_checklists) chk, any_value(years_surveyed) yrs
         FROM '{a.store}'
         WHERE trusted=1 AND state='{a.state.replace("'","''")}' AND week IN ({weeks})
         GROUP BY locality_id, week),
       peak AS (
         SELECT locality_id, arg_max(loc,score) locality, MAX(score) score,
-               arg_max(n_species,score) n_species, arg_max(chk,score) checklists, arg_max(week,score) wk
+               arg_max(n_species,score) n_species, arg_max(chk,score) checklists,
+               arg_max(yrs,score) yrs, arg_max(week,score) wk
         FROM cell GROUP BY locality_id)
       SELECT *, row_number() OVER (ORDER BY score DESC) AS rank FROM peak""")
 
     print(f"\n=== top 20 hotspots — {a.state}, month {a.month} (weeks {weeks}), alpha=0, no life list ===")
-    print(con.execute("""SELECT rank, round(score,2) score, n_species, checklists, wk, locality
+    print(con.execute("""SELECT rank, round(score,2) score, n_species, checklists, yrs, wk, locality
                          FROM rk ORDER BY rank LIMIT 20""").df().to_string(index=False))
 
     ntot = con.execute("SELECT COUNT(*) FROM rk").fetchone()[0]
@@ -47,7 +49,7 @@ def main():
 
     print("\n=== where the famous spots land ===")
     for name in a.look:
-        df = con.execute(f"""SELECT rank, round(score,2) score, n_species, checklists, locality
+        df = con.execute(f"""SELECT rank, round(score,2) score, n_species, checklists, yrs, locality
                              FROM rk WHERE lower(locality) LIKE '%{name.lower()}%' ORDER BY rank LIMIT 5""").df()
         print(f"\n  '{name}':")
         print(df.to_string(index=False) if len(df) else "    (no hotspot with that name in the data)")
